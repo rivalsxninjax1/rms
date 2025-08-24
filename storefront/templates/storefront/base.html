@@ -13,7 +13,7 @@
     <a href="/" class="brand">RMS</a>
     <nav>
       <a href="/menu/">Menu</a>
-      <a href="/orders/" id="nav-orders">My Orders</a>
+      <a id="nav-orders" href="{% url 'storefront:my_orders' %}" style="display:none;">My Orders</a>
       <a href="/reservations/">Reservations</a>
       <a href="/contact/">Contact</a>
       <a href="#" id="auth-link">Login</a>

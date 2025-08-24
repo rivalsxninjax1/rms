@@ -1,6 +1,8 @@
 /* storefront/static/storefront/app.js
- * Canonical client script.
- * Fixes: path mismatch, add-to-cart event delegation, type="button" buttons.
+ * Canonical client script (moved from js/app.js).
+ * - Fixes path mismatch so the real script loads.
+ * - Keeps Add-to-Cart working via event delegation.
+ * - Leaves Pay button binding to cart-pay.js to avoid double listeners.
  */
 
 /* ===========================
@@ -38,6 +40,7 @@ async function api(url, opts={}, retry=true){
   }
   if(!retry || !auth.refresh()) throw {status:first.res.status, data:first.data};
 
+  // refresh (try legacy then clean)
   let r = await fetch("/api/auth/token/refresh/", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({refresh: auth.refresh()})});
   if(!r.ok){
     r = await fetch("/api/token/refresh/", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({refresh: auth.refresh()})});
@@ -137,7 +140,7 @@ function bindAuthModal(){
 }
 
 /* ===========================
- * Cart (localStorage)
+ * Cart (localStorage primary)
  * =========================== */
 const CART_KEY = "cart";
 function getCart(){ try{ return JSON.parse(localStorage.getItem(CART_KEY) || "[]" ); }catch{ return []; } }
@@ -170,6 +173,7 @@ function updateCartBadge(){
 }
 
 function addToCart(itemOrId, qty=1, itemFallback=null){
+  // Accept either an item object with fields or a numeric id + fallback data
   let item = null;
   if (typeof itemOrId === "object" && itemOrId !== null){
     item = itemOrId;
@@ -206,7 +210,7 @@ function removeFromCart(id){
   saveCart(cart);
 }
 
-/* Render cart for #cart-items or legacy #cart */
+/* Render cart for two possible containers: #cart-items (new) or #cart (legacy) */
 function renderCart(){
   const holder = document.getElementById("cart-items") || document.getElementById("cart");
   if(!holder) return;
@@ -247,13 +251,14 @@ function renderCart(){
 }
 
 /* ===========================
- * Menu (PUBLIC, optional)
+ * Menu (PUBLIC)
  * =========================== */
 async function loadMenu(){
   const wrap=document.getElementById("menu-grid"); if(!wrap) return;
   try{
     let data = await api("/api/menu/items/");
     if (!Array.isArray(data) && !data.results && !data.items){
+      // compat: some old routes return list directly at /api/items/
       data = await api("/api/items/");
     }
     const items = Array.isArray(data) ? data : (data.results || data.items || []);
@@ -307,9 +312,10 @@ async function loadMenuItem(id){
 }
 
 /* ===========================
- * Global Event Delegation
+ * Event bindings (delegated)
  * =========================== */
 document.addEventListener("click", (e) => {
+  // Add-to-cart
   const btn = e.target.closest(".add-to-cart");
   if (btn){
     const item = {
@@ -357,8 +363,10 @@ document.addEventListener("DOMContentLoaded", async ()=>{
   bindAuthModal();
   await refreshHeaderAuth();
 
-  if(window.page==='menu')       loadMenu();        // no-op if #menu-grid missing
+  // If server-driven pages want API rendering, these helpers remain available:
+  if(window.page==='menu')       loadMenu();        // will no-op if #menu-grid isn't present
   if(window.page==='menu_item')  loadMenuItem(window.item_id);
 
-  renderCart(); // only affects pages with a cart container
+  // Render cart if the container exists
+  renderCart();
 });

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import FieldDoesNotExist
+from django.db.models import Q
 from django.shortcuts import render, get_object_or_404
+from django.urls import reverse_lazy
 from django.views.generic import TemplateView
 
 # Optional, robust imports (won't crash if app/model not ready)
@@ -20,7 +22,7 @@ except Exception:  # pragma: no cover
 
 def _ctx(page: str | None = None, **kw):
     """
-    Small helper to add a 'page' flag for active nav highlighting.
+    Add a 'page' key for active-nav highlighting and merge extra context.
     """
     base = {"page": page or ""}
     base.update(kw)
@@ -28,7 +30,7 @@ def _ctx(page: str | None = None, **kw):
 
 
 # -------------------------
-# Existing function-based views you already had
+# Function-based pages (existing)
 # -------------------------
 def home(request):
     return render(request, "storefront/index.html", _ctx("home"))
@@ -81,16 +83,16 @@ def reservations(request):
 
 
 # -------------------------
-# New/updated class-based views
+# Class-based pages (updated)
 # -------------------------
 class MenuItemsView(TemplateView):
     """
-    Server-rendered menu page that actually loads items with images.
+    Server-rendered menu page that loads items with images.
     Template: storefront/menu_items.html
 
     - Works even if MenuItem has no 'is_active' or 'category' fields.
     - Selects related 'category' only if field exists to avoid errors.
-    - Orders by category name then item name when possible; otherwise falls back.
+    - Orders by category name then item name when possible; otherwise falls back to id.
     """
     template_name = "storefront/menu_items.html"
 
@@ -115,10 +117,11 @@ class MenuItemsView(TemplateView):
         category_exists = False
         try:
             MenuItem._meta.get_field("category")
-            qs = qs.select_related("category")
-            category_exists = True
         except FieldDoesNotExist:
             category_exists = False
+        else:
+            qs = qs.select_related("category")
+            category_exists = True
 
         # Ordering: category name then item name if possible; fallback to id
         order_by = []
@@ -138,13 +141,17 @@ class MenuItemsView(TemplateView):
 
 class MyOrdersView(LoginRequiredMixin, TemplateView):
     """
-    Simple orders history page for the signed-in user.
+    My Orders (paid history) for the signed-in user.
     Template: storefront/my_orders.html
 
-    - Shows paid status (via related Payment, if present)
-    - Shows invoice PDF link (if stored on Order.invoice_pdf)
+    Shows only paid orders and prefetches items->menu_item for fast rendering.
+    Paid definition: Payment.is_paid OR Order.is_paid OR Order.status == 'PAID'.
     """
     template_name = "storefront/my_orders.html"
+
+    # Ensure redirect goes to our storefront login (not /accounts/login/)
+    login_url = reverse_lazy("storefront:login")
+    redirect_field_name = "next"
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -153,9 +160,11 @@ class MyOrdersView(LoginRequiredMixin, TemplateView):
             ctx["orders"] = []
             return ctx
 
+        paid_q = Q(payment__is_paid=True) | Q(is_paid=True) | Q(status="PAID")
         qs = (
-            Order.objects.filter(created_by=self.request.user)
-            .select_related("payment")  # OneToOne if payments app is enabled
+            Order.objects.filter(Q(created_by=self.request.user) & paid_q)
+            .select_related("payment")
+            .prefetch_related("items__menu_item")
             .order_by("-created_at")
         )
         ctx["orders"] = qs

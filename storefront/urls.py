@@ -10,7 +10,7 @@ urlpatterns = [
     path("about/", views.about, name="about"),
     path("branches/", views.branches, name="branches"),
 
-    # Updated: /menu/ renders items + images + actions via MenuItemsView
+    # /menu/ renders items + images + actions via MenuItemsView
     path("menu/", MenuItemsView.as_view(), name="menu"),
     path("menu/<int:item_id>/", views.menu_item, name="menu-item"),
 
@@ -20,7 +20,7 @@ urlpatterns = [
     # Legacy orders page kept (unchanged)
     path("orders/", views.orders, name="orders"),
 
-    # New: user’s order history page with payment + invoice links
+    # My Orders (paid history + invoice links + reorder)
     path("my-orders/", MyOrdersView.as_view(), name="my_orders"),
 
     path("contact/", views.contact, name="contact"),

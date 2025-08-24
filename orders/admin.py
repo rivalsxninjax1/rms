@@ -8,21 +8,23 @@ from django.utils.html import format_html
 
 from .models import Order, OrderItem
 
-# Optional: Payment (from payments app)
+# Optional: Payment (from payments app). If missing, admin still works.
 try:
     from payments.models import Payment
-except Exception:
+except Exception:  # pragma: no cover
     Payment = None
 
-# Optional: invoice generator helper
+# Optional: invoice generator helper. If missing, the action is a no-op.
 try:
     from payments.services import save_invoice_pdf_file
-except Exception:
-    def save_invoice_pdf_file(order):  # safe no-op fallback
+except Exception:  # pragma: no cover
+    def save_invoice_pdf_file(order):  # type: ignore
+        """Safe no-op if invoice generator isn't available."""
         return None
 
 
 class OrderItemInline(admin.TabularInline):
+    """Inline to inspect order line items."""
     model = OrderItem
     extra = 0
     raw_id_fields = ("menu_item",)
@@ -30,6 +32,9 @@ class OrderItemInline(admin.TabularInline):
 
 if Payment:
     class PaymentInline(admin.StackedInline):
+        """
+        Read-only view of the related Payment (OneToOne via order).
+        """
         model = Payment
         extra = 0
         can_delete = False
@@ -52,10 +57,10 @@ else:
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
     """
-    Orders aligned with RMS Admin:
-    - Payment inline (read-only)
-    - Invoice link column
-    - Actions: Regenerate invoice, Export sales (CSV)
+    RMS-aligned Order admin:
+    - Payment inline (read-only) when payments app is installed
+    - Invoice link (if `invoice_pdf` FileField exists on Order)
+    - Actions: Regenerate invoice PDF, Export sales CSV
     """
     list_display = (
         "id",
@@ -78,15 +83,20 @@ class OrderAdmin(admin.ModelAdmin):
 
     actions = ["regenerate_invoice_pdf", "export_sales_csv"]
 
+    # ---- helpers / columns ----
     def get_readonly_fields(self, request, obj=None):
         base = super().get_readonly_fields(request, obj)
-        # Show invoice file if the field exists on your Order model
+        # If your Order has an invoice file field, show it read-only
         if hasattr(Order, "invoice_pdf"):
             return tuple(base) + ("invoice_pdf",)
         return base
 
-    def paid(self, obj):
-        # Prefer Payment.is_paid; fallback to legacy Order.is_paid
+    def paid(self, obj: Order) -> bool:
+        """
+        Paid status preference:
+        - Payment.is_paid (if payments app present)
+        - fallback to legacy Order.is_paid
+        """
         try:
             if Payment and hasattr(obj, "payment"):
                 return bool(getattr(obj.payment, "is_paid", False))
@@ -96,7 +106,10 @@ class OrderAdmin(admin.ModelAdmin):
     paid.boolean = True
     paid.short_description = "Paid"
 
-    def invoice_link(self, obj):
+    def invoice_link(self, obj: Order) -> str:
+        """
+        Clickable PDF link if Order.invoice_pdf exists and is populated.
+        """
         invoice = getattr(obj, "invoice_pdf", None)
         if invoice:
             try:
@@ -106,14 +119,18 @@ class OrderAdmin(admin.ModelAdmin):
         return "-"
     invoice_link.short_description = "Invoice"
 
-    # --- admin actions ---
+    # ---- actions ----
     def regenerate_invoice_pdf(self, request, queryset):
+        """
+        Rebuild invoice PDF for selected orders. Safe even if helper is a no-op.
+        """
         count = 0
         for order in queryset:
             try:
-                save_invoice_pdf_file(order)  # idempotent
+                save_invoice_pdf_file(order)  # should be idempotent
                 count += 1
             except Exception:
+                # keep processing; report how many succeeded
                 continue
         self.message_user(request, f"Regenerated invoice for {count} order(s).")
     regenerate_invoice_pdf.short_description = "Regenerate invoice PDF"
@@ -121,7 +138,7 @@ class OrderAdmin(admin.ModelAdmin):
     def export_sales_csv(self, request, queryset):
         """
         Export selected orders as CSV.
-        Tip for daily sales: filter by 'created_at = Today' in the sidebar, then run this.
+        Tip for daily sales: filter by 'created_at = Today' then run this action.
         """
         response = HttpResponse(content_type="text/csv")
         response["Content-Disposition"] = 'attachment; filename="sales.csv"'
