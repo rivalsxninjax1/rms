@@ -6,9 +6,5 @@ class OrdersConfig(AppConfig):
     name = "orders"
 
     def ready(self):
-        # Register signal handlers (cart merge on login)
-        try:
-            from . import signals  # noqa: F401
-        except Exception:
-            # Keep the app boot resilient; log if you prefer
-            pass
+        # Ensure signals (merge on login) are registered
+        from . import signals  # noqa: F401
