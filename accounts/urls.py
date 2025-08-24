@@ -1,7 +1,10 @@
 # accounts/urls.py
 from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
-from .views import RegisterView, MeView, EmailOrUsernameTokenObtainPairView
+from .views import (
+    RegisterView, MeView, EmailOrUsernameTokenObtainPairView,
+    whoami, SessionLoginFromJWT, SessionLogout
+)
 
 urlpatterns = [
     # Clean/current
@@ -11,7 +14,12 @@ urlpatterns = [
     path("token/verify/", TokenVerifyView.as_view(), name="token_verify"),
     path("me/", MeView.as_view(), name="me"),
 
-    # Back-compat for legacy JS
+    # Session bridge (client uses these)
+    path("auth/whoami/", whoami, name="whoami"),
+    path("auth/session/", SessionLoginFromJWT.as_view(), name="session_from_jwt"),
+    path("auth/logout/", SessionLogout.as_view(), name="session_logout"),
+
+    # Back-compat for legacy JS (kept)
     path("auth/register/", RegisterView.as_view(), name="auth_register"),
     path("auth/token/", EmailOrUsernameTokenObtainPairView.as_view(), name="auth_token_obtain_pair"),
     path("auth/token/refresh/", TokenRefreshView.as_view(), name="auth_token_refresh"),

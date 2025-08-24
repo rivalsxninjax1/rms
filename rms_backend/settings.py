@@ -54,7 +54,7 @@ INSTALLED_APPS = [
     "reports",
     "billing",
     "payments",
-    "promotions",
+    "coupons",
     "storefront",
 ]
 

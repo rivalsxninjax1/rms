@@ -5,6 +5,7 @@ from . import views
 app_name = "payments"
 
 urlpatterns = [
+    # keep your existing structure
     path("create-checkout-session/<int:order_id>/", views.create_checkout_session_view, name="create_checkout_session"),
     path("webhook/", views.stripe_webhook, name="stripe_webhook"),
     path("success/", views.checkout_success, name="checkout_success"),

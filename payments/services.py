@@ -25,31 +25,62 @@ def _money_cents(amount: Decimal) -> int:
     return int(Decimal(amount).quantize(Decimal("0.01")) * 100)
 
 
+def _apply_order_discounts(order, total: Decimal) -> Decimal:
+    """
+    Apply discount fields if the Order exposes them:
+    - discount_percent / coupon_percent
+    - discount_amount / coupon_amount
+    - coupon relation with 'percent' field
+    """
+    try:
+        # Percent fields first
+        for pf in ("discount_percent", "coupon_percent"):
+            if hasattr(order, pf):
+                p = getattr(order, pf) or 0
+                if p:
+                    total = total * (Decimal(100) - Decimal(str(p))) / Decimal(100)
+
+        # Coupon relation (percent)
+        if hasattr(order, "coupon") and getattr(order, "coupon", None):
+            pct = getattr(order.coupon, "percent", 0)
+            if pct:
+                total = total * (Decimal(100) - Decimal(str(pct))) / Decimal(100)
+
+        # Fixed amounts
+        for af in ("discount_amount", "coupon_amount"):
+            if hasattr(order, af):
+                a = getattr(order, af) or 0
+                if a:
+                    total = total - Decimal(str(a))
+    except Exception:
+        pass
+    return max(Decimal("0.00"), total).quantize(Decimal("0.01"))
+
+
 def compute_order_total(order) -> Decimal:
     """
-    Compute order total from Order/OrderItem.
+    Compute order total from Order/OrderItem and apply discounts if present.
     Uses order.total if present; otherwise sums line items.
     """
     try:
         total = getattr(order, "total", None)
         if total is not None:
-            return Decimal(str(total)).quantize(Decimal("0.01"))
-    except Exception:
-        pass
-
-    total = Decimal("0")
-    try:
-        for it in order.items.all():  # adjust if related_name differs
-            line_total = getattr(it, "line_total", None)
-            if line_total is not None:
-                total += Decimal(str(line_total))
-            else:
-                qty = Decimal(str(getattr(it, "quantity", 0)))
-                unit = Decimal(str(getattr(it, "unit_price", 0)))
-                total += (qty * unit)
+            total = Decimal(str(total)).quantize(Decimal("0.01"))
+        else:
+            total = Decimal("0")
+            for it in order.items.all():  # adjust if related_name differs
+                line_total = getattr(it, "line_total", None)
+                if line_total is not None:
+                    total += Decimal(str(line_total))
+                else:
+                    qty = Decimal(str(getattr(it, "quantity", 0)))
+                    unit = Decimal(str(getattr(it, "unit_price", 0)))
+                    total += (qty * unit)
+        total = _apply_order_discounts(order, total)
+        return total
     except Exception as e:
         logger.exception("Failed computing order total: %s", e)
-    return total.quantize(Decimal("0.01"))
+        return Decimal("0.00")
 
 
 def ensure_payment(order) -> Payment:
@@ -75,12 +106,12 @@ def create_checkout_session(order):
     if amount <= 0:
         raise ValueError("Order total is invalid")
 
-    success_url = f"{_site_url()}{reverse('payments:checkout_success')}?order={order.id}"
+    success_url = f"{_site_url()}{reverse('payments:checkout_success')}?order={order.id}&session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url = f"{_site_url()}{reverse('payments:checkout_cancel')}?order={order.id}"
 
     session = stripe.checkout.Session.create(
         mode="payment",
-        payment_method_types=["card"],  # includes Mastercard
+        payment_method_types=["card"],
         line_items=[{
             "price_data": {
                 "currency": payment.currency,
@@ -120,10 +151,6 @@ def mark_paid(order, payment_intent_id: Optional[str] = None):
 
 # ---------- Optional: PDF invoice (guarded) ----------
 def generate_order_invoice_pdf(order) -> Tuple[Optional[str], Optional[bytes]]:
-    """
-    Generate invoice PDF and return (filename, bytes).
-    If reportlab isn't installed, returns (None, None).
-    """
     try:
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.units import mm
@@ -131,8 +158,6 @@ def generate_order_invoice_pdf(order) -> Tuple[Optional[str], Optional[bytes]]:
     except Exception:
         logger.info("reportlab not installed; skipping invoice pdf generation")
         return (None, None)
-
-    from .services import compute_order_total  # safe self-import
 
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
@@ -167,22 +192,13 @@ def generate_order_invoice_pdf(order) -> Tuple[Optional[str], Optional[bytes]]:
     return (filename, data)
 
 
-# ---------- Compatibility helper ----------
 def save_invoice_pdf_file(order) -> Optional[str]:
-    """
-    Back-compat wrapper expected by older code:
-    - generates the invoice PDF
-    - if the Order model has an 'invoice_pdf' FileField, saves into it
-    - returns the filename (or None if skipped)
-    """
     try:
         filename, pdf_bytes = generate_order_invoice_pdf(order)
         if not filename or not pdf_bytes:
             return None
-
         if hasattr(order, "invoice_pdf"):
             from django.core.files.base import ContentFile
-            # avoid regenerating if already present
             if not order.invoice_pdf:
                 order.invoice_pdf.save(filename, ContentFile(pdf_bytes), save=True)
         return filename

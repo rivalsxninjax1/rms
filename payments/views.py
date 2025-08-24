@@ -1,4 +1,5 @@
 # payments/views.py
+import json
 import logging
 
 import stripe
@@ -6,6 +7,7 @@ from django.conf import settings
 from django.http import HttpResponse, JsonResponse, HttpResponseRedirect
 from django.shortcuts import render, get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
+from django.contrib.auth.decorators import login_required
 
 from orders.models import Order
 from payments.services import (
@@ -18,11 +20,12 @@ logger = logging.getLogger(__name__)
 stripe.api_key = getattr(settings, "STRIPE_SECRET_KEY", "")
 
 
-@csrf_exempt
+@login_required(login_url="/")
 def create_checkout_session_view(request, order_id: int):
     """
     POST -> returns {"url": "..."} for Stripe Checkout redirect
     GET  -> 302 to Stripe (fallback/manual)
+    Accepts optional JSON body: {"coupon": "PHRASE"} to attach to order.
     """
     order = get_object_or_404(Order, id=order_id)
 
@@ -32,6 +35,22 @@ def create_checkout_session_view(request, order_id: int):
 
     if request.method != "POST":
         return HttpResponse(status=405)
+
+    # Optional: coupon attach
+    try:
+        payload = json.loads(request.body.decode("utf-8") or "{}")
+    except Exception:
+        payload = {}
+    coupon_code = (payload.get("coupon") or "").strip()
+
+    if coupon_code:
+        try:
+            from coupons.services import apply_coupon_code_to_order
+            ok, _msg = apply_coupon_code_to_order(order, coupon_code)
+            if not ok:
+                logger.info("Coupon rejected for order %s", order_id)
+        except Exception as e:
+            logger.info("Coupon apply failed: %s", e)
 
     try:
         session = create_checkout_session(order)
@@ -49,9 +68,6 @@ def create_checkout_session_view(request, order_id: int):
 
 @csrf_exempt
 def stripe_webhook(request):
-    """
-    Verify Stripe signature; mark order as paid on session completion; save invoice.
-    """
     payload = request.body
     sig_header = request.META.get("HTTP_STRIPE_SIGNATURE", "")
     endpoint_secret = getattr(settings, "STRIPE_WEBHOOK_SECRET", "")
@@ -82,17 +98,23 @@ def stripe_webhook(request):
 
 
 def checkout_success(request):
-    """
-    Success page:
-    - makes sure invoice exists
-    - provides invoice_url for View/Download/Print
-    - provides navigation back to Home and to Menu
-    """
     oid = request.GET.get("order")
+    session_id = request.GET.get("session_id")
     order = None
     invoice_url = None
 
-    if oid:
+    if session_id and getattr(settings, "STRIPE_SECRET_KEY", ""):
+        try:
+            sess = stripe.checkout.Session.retrieve(session_id)
+            order_id = (sess.get("metadata") or {}).get("order_id") or oid
+            if order_id:
+                order = Order.objects.filter(pk=order_id).first()
+            if order and (sess.get("payment_status") == "paid"):
+                mark_paid(order, sess.get("payment_intent"))
+        except Exception as e:
+            logger.info("Could not verify session %s: %s", session_id, e)
+
+    if order is None and oid:
         try:
             order = Order.objects.get(pk=oid)
         except Order.DoesNotExist:
@@ -100,7 +122,6 @@ def checkout_success(request):
 
     if order:
         try:
-            # ensure invoice exists even if webhook race
             if not getattr(order, "invoice_pdf", None) or not order.invoice_pdf:
                 save_invoice_pdf_file(order)
             if getattr(order, "invoice_pdf", None) and order.invoice_pdf:
@@ -108,7 +129,7 @@ def checkout_success(request):
         except Exception:
             pass
 
-    # Clear session cart after success
+    # clear server-side session cart
     try:
         request.session["cart"] = []
         request.session.modified = True

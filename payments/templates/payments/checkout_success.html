@@ -18,7 +18,6 @@
             View / Download Invoice (PDF)
           </a>
           <button id="printInvoice" class="btn btn-primary">Print Invoice</button>
-          <!-- hidden iframe used for printing the PDF directly -->
           <iframe id="invoiceFrame" src="{{ invoice_url }}" style="display:none;"></iframe>
         {% else %}
           <p><em>Invoice will be available shortly. Please refresh this page after a moment.</em></p>
@@ -28,35 +27,17 @@
       <hr style="margin:20px 0; border:0; border-top:1px solid #eee;">
 
       <div>
-        <a href="/" class="btn">⬅ Back to Home</a>
-        <a href="/menu/" class="btn btn-secondary" style="margin-left:8px;">Continue Shopping</a>
+        <a href="{% url 'storefront:my_orders' %}" class="btn">Go to My Orders</a>
+        <a href="{% url 'storefront:menu' %}" class="btn btn-secondary" style="margin-left:8px;">Continue Shopping</a>
       </div>
     </div>
   </div>
 
   <script>
-    document.addEventListener("DOMContentLoaded", function(){
-      var printBtn = document.getElementById("printInvoice");
-      var frame = document.getElementById("invoiceFrame");
-      if (printBtn && frame && frame.src) {
-        printBtn.addEventListener("click", function(){
-          try {
-            // ensure frame is loaded before print
-            const f = document.getElementById("invoiceFrame");
-            if (!f || !f.contentWindow) {
-              alert("Opening invoice…");
-              window.open(document.getElementById("viewInvoice").href, "_blank");
-              return;
-            }
-            // give a short delay in case it hasn't finished loading
-            setTimeout(function(){ f.contentWindow.focus(); f.contentWindow.print(); }, 300);
-          } catch (e) {
-            // fallback: open in new tab
-            const a = document.getElementById("viewInvoice");
-            if (a) window.open(a.href, "_blank");
-          }
-        });
-      }
-    });
+    // Clear browser cart + update badge
+    try {
+      localStorage.removeItem("cart");
+      if (typeof updateCartBadge === "function") updateCartBadge();
+    } catch (e) {}
   </script>
 {% endblock %}

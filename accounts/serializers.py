@@ -6,8 +6,10 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 User = get_user_model()
 
+
 class EmailOrUsernameTokenObtainPairSerializer(TokenObtainPairSerializer):
     """Allow login with username OR email."""
+
     @classmethod
     def get_token(cls, user):
         tok = super().get_token(user)
@@ -29,6 +31,7 @@ class EmailOrUsernameTokenObtainPairSerializer(TokenObtainPairSerializer):
                 attrs["username"] = getattr(user, User.USERNAME_FIELD)
             except User.DoesNotExist:
                 pass
+
         data = super().validate(attrs)
         data["user"] = {
             "id": self.user.id,
@@ -41,7 +44,7 @@ class EmailOrUsernameTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 
 class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, min_length=6)
+    password = serializers.CharField(write_only=True, min_length=8)
 
     class Meta:
         model = User

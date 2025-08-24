@@ -7,46 +7,62 @@
     <h1>My Orders</h1>
 
     {% if orders %}
-      <table class="table" style="width:100%;border-collapse:collapse;">
-        <thead>
-          <tr>
-            <th style="text-align:left;padding:8px;border-bottom:1px solid #eee;">#</th>
-            <th style="text-align:left;padding:8px;border-bottom:1px solid #eee;">Date</th>
-            <th style="text-align:left;padding:8px;border-bottom:1px solid #eee;">Status</th>
-            <th style="text-align:left;padding:8px;border-bottom:1px solid #eee;">Paid</th>
-            <th style="text-align:left;padding:8px;border-bottom:1px solid #eee;">Total</th>
-            <th style="text-align:left;padding:8px;border-bottom:1px solid #eee;">Invoice</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for o in orders %}
-            <tr>
-              <td style="padding:8px;border-bottom:1px solid #f5f5f5;">{{ o.id }}</td>
-              <td style="padding:8px;border-bottom:1px solid #f5f5f5;">{{ o.created_at|date:"Y-m-d H:i" }}</td>
-              <td style="padding:8px;border-bottom:1px solid #f5f5f5;">{{ o.status }}</td>
-              <td style="padding:8px;border-bottom:1px solid #f5f5f5;">
-                {% if o.payment and o.payment.is_paid %}✅{% else %}—{% endif %}
-              </td>
-              <td style="padding:8px;border-bottom:1px solid #f5f5f5;">
-                {% if o.payment %}
-                  {{ o.payment.currency|upper }} {{ o.payment.amount }}
-                {% else %}
-                  —
-                {% endif %}
-              </td>
-              <td style="padding:8px;border-bottom:1px solid #f5f5f5;">
-                {% if o.invoice_pdf %}
-                  <a href="{{ o.invoice_pdf.url }}" target="_blank" rel="noopener">PDF</a>
-                {% else %}
-                  —
-                {% endif %}
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+      <div class="stack">
+        {% for o in orders %}
+          <div class="card" style="display:flex;flex-direction:column;gap:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+              <div>
+                <div class="muted">Order</div>
+                <div><strong>#{{ o.id }}</strong></div>
+              </div>
+              <div style="text-align:right;">
+                <div class="muted">{{ o.created_at|date:"Y-m-d H:i" }}</div>
+                <div>
+                  {% if o.payment and o.payment.is_paid or o.is_paid or o.status == "PAID" %}
+                    <span class="tag tag-success">PAID</span>
+                  {% else %}
+                    <span class="tag">PENDING</span>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+
+            <!-- Thumbnails row -->
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              {% for it in o.items.all %}
+                <div style="display:flex;align-items:center;border:1px solid #eee;border-radius:10px;padding:6px 8px;gap:8px;">
+                  {% if it.menu_item and it.menu_item.image %}
+                    <img src="{{ it.menu_item.image.url }}" alt="{{ it.menu_item.name }}" style="width:48px;height:48px;object-fit:cover;border-radius:8px;" />
+                  {% else %}
+                    <div style="width:48px;height:48px;border-radius:8px;background:#f3f4f6;display:flex;align-items:center;justify-content:center;">—</div>
+                  {% endif %}
+                  <div>
+                    <div style="font-weight:600;">{{ it.menu_item.name }}</div>
+                    <div class="muted">x{{ it.quantity }} @ {{ it.unit_price }}</div>
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+
+            <!-- Actions -->
+            <div style="display:flex;gap:8px;justify-content:flex-end;">
+              {% if o.invoice_pdf %}
+                <a href="{{ o.invoice_pdf.url }}" target="_blank" rel="noopener" class="btn btn-secondary">Invoice</a>
+              {% endif %}
+              <button
+                class="btn btn-primary btn-reorder"
+                title="Reorder these items"
+                data-items='[ {% for it in o.items.all %}{ "id": {{ it.menu_item.id }}, "name": "{{ it.menu_item.name|escapejs }}", "price": "{{ it.unit_price }}", "quantity": {{ it.quantity }} }{% if not forloop.last %}, {% endif %}{% endfor %} ]'
+              >Order Again</button>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
     {% else %}
       <p>You don’t have any orders yet.</p>
     {% endif %}
   </div>
+
+  <!-- Page-specific reorder handler -->
+  <script src="{% static 'storefront/my_orders.js' %}" defer></script>
 {% endblock %}
