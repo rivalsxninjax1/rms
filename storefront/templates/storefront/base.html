@@ -71,7 +71,7 @@
     window.page = "{{ page|default:'' }}";
     window.item_id = {{ item_id|default:'0' }};
   </script>
-
-  <script src="{% static 'storefront/app.js' %}"></script>
+<script src="{% static 'storefront/app.js' %}" defer></script>
+<script src="{% static 'storefront/cart-pay.js' %}" defer></script>
 </body>
 </html>

@@ -1,7 +1,29 @@
 # menu/serializers.py
 from rest_framework import serializers
 
+def _abs_url(request, url: str | None) -> str | None:
+    """Return an absolute URL if a request is available."""
+    if not url:
+        return None
+    if request is None:
+        return url
+    try:
+        return request.build_absolute_uri(url)
+    except Exception:
+        return url
+
+
 class MenuItemSerializer(serializers.Serializer):
+    """
+    Robust serializer that doesn't assume model field names.
+    It exposes:
+      - id
+      - name
+      - description
+      - price
+      - image (absolute URL if possible)
+      - category: {id, name}
+    """
     id = serializers.IntegerField()
     name = serializers.SerializerMethodField()
     description = serializers.SerializerMethodField()
@@ -29,15 +51,23 @@ class MenuItemSerializer(serializers.Serializer):
         return 0
 
     def get_image(self, obj):
+        """
+        Return absolute URL for image if request is in serializer context.
+        Looks for common image field names.
+        """
+        request = self.context.get("request")
         for f in ("image", "photo", "thumbnail"):
             if hasattr(obj, f) and getattr(obj, f):
                 try:
-                    return getattr(obj, f).url
+                    return _abs_url(request, getattr(obj, f).url)
                 except Exception:
-                    return str(getattr(obj, f))
+                    return _abs_url(request, str(getattr(obj, f)))
         return None
 
     def get_category(self, obj):
+        """
+        Return minimal category info without assuming exact field names.
+        """
         for f in ("category", "menu_category", "group"):
             if hasattr(obj, f) and getattr(obj, f):
                 c = getattr(obj, f)

@@ -39,7 +39,7 @@ def compute_order_total(order) -> Decimal:
 
     total = Decimal("0")
     try:
-        for it in order.items.all():  # adjust if your related_name differs
+        for it in order.items.all():  # adjust if related_name differs
             line_total = getattr(it, "line_total", None)
             if line_total is not None:
                 total += Decimal(str(line_total))
@@ -80,7 +80,7 @@ def create_checkout_session(order):
 
     session = stripe.checkout.Session.create(
         mode="payment",
-        payment_method_types=["card"],  # includes Mastercard; Stripe manages brands
+        payment_method_types=["card"],  # includes Mastercard
         line_items=[{
             "price_data": {
                 "currency": payment.currency,
@@ -112,7 +112,6 @@ def mark_paid(order, payment_intent_id: Optional[str] = None):
 
     try:
         if hasattr(order, "status"):
-            # keep your own status naming; "PAID" is common
             order.status = "PAID"
             order.save(update_fields=["status"])
     except Exception:
@@ -133,6 +132,8 @@ def generate_order_invoice_pdf(order) -> Tuple[Optional[str], Optional[bytes]]:
         logger.info("reportlab not installed; skipping invoice pdf generation")
         return (None, None)
 
+    from .services import compute_order_total  # safe self-import
+
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     width, height = A4
@@ -149,7 +150,10 @@ def generate_order_invoice_pdf(order) -> Tuple[Optional[str], Optional[bytes]]:
 
     try:
         for it in order.items.all():
-            c.drawString(30 * mm, y, f"- {it.menu_item.name} x {it.quantity} @ {it.unit_price}")
+            name = getattr(getattr(it, "menu_item", None), "name", "Item")
+            qty = getattr(it, "quantity", 0)
+            unit = getattr(it, "unit_price", 0)
+            c.drawString(30 * mm, y, f"- {name} x {qty} @ {unit}")
             y -= 6 * mm
     except Exception:
         pass
@@ -176,10 +180,11 @@ def save_invoice_pdf_file(order) -> Optional[str]:
         if not filename or not pdf_bytes:
             return None
 
-        # Save to Order.invoice_pdf if present
         if hasattr(order, "invoice_pdf"):
             from django.core.files.base import ContentFile
-            order.invoice_pdf.save(filename, ContentFile(pdf_bytes), save=True)
+            # avoid regenerating if already present
+            if not order.invoice_pdf:
+                order.invoice_pdf.save(filename, ContentFile(pdf_bytes), save=True)
         return filename
     except Exception as e:
         logger.exception("Failed to save invoice PDF: %s", e)

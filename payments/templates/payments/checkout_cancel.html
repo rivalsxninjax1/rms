@@ -1,11 +1,16 @@
+{% extends "storefront/base.html" %}
 {% load static %}
+{% block title %}Payment Canceled{% endblock %}
 
-<!doctype html>
-<html>
-  <head><meta charset="utf-8"><title>Payment Cancelled</title></head>
-  <body>
-    <h1>Payment cancelled</h1>
-    <p>You can return to checkout and try again.</p>
-<script src="{% static 'js/cart.js' %}"></script>
-  </body>
-</html>
+{% block content %}
+  <div class="container" style="max-width: 760px; margin: 24px auto;">
+    <div style="border:1px solid #e5e7eb; border-radius:12px; padding:24px;">
+      <h1 style="margin:0 0 12px;">❌ Payment Canceled</h1>
+      <p>Your payment was canceled. You can return to your cart and try again.</p>
+      <div style="margin-top:16px;">
+        <a href="/cart/" class="btn btn-primary">Back to Cart</a>
+        <a href="/menu/" class="btn" style="margin-left:8px;">Continue Browsing</a>
+      </div>
+    </div>
+  </div>
+{% endblock %}

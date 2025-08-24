@@ -1,5 +1,4 @@
 # payments/views.py
-import json
 import logging
 
 import stripe
@@ -11,8 +10,8 @@ from django.views.decorators.csrf import csrf_exempt
 from orders.models import Order
 from payments.services import (
     create_checkout_session,
-    generate_order_invoice_pdf,
     mark_paid,
+    save_invoice_pdf_file,
 )
 
 logger = logging.getLogger(__name__)
@@ -22,8 +21,8 @@ stripe.api_key = getattr(settings, "STRIPE_SECRET_KEY", "")
 @csrf_exempt
 def create_checkout_session_view(request, order_id: int):
     """
-    POST -> returns {"url": "..."} for Stripe Checkout redirect (used by cart-pay.js)
-    GET  -> convenience redirect to Stripe (302) if someone hits it directly.
+    POST -> returns {"url": "..."} for Stripe Checkout redirect
+    GET  -> 302 to Stripe (fallback/manual)
     """
     order = get_object_or_404(Order, id=order_id)
 
@@ -51,7 +50,7 @@ def create_checkout_session_view(request, order_id: int):
 @csrf_exempt
 def stripe_webhook(request):
     """
-    Verify Stripe signature; mark order as paid on session completion.
+    Verify Stripe signature; mark order as paid on session completion; save invoice.
     """
     payload = request.body
     sig_header = request.META.get("HTTP_STRIPE_SIGNATURE", "")
@@ -73,12 +72,7 @@ def stripe_webhook(request):
                 try:
                     order = Order.objects.get(id=order_id)
                     mark_paid(order, payment_intent_id)
-
-                    # optionally generate + attach invoice if your Order has FileField invoice_pdf
-                    filename, pdf_bytes = generate_order_invoice_pdf(order)
-                    if filename and pdf_bytes and hasattr(order, "invoice_pdf"):
-                        from django.core.files.base import ContentFile
-                        order.invoice_pdf.save(filename, ContentFile(pdf_bytes), save=True)
+                    save_invoice_pdf_file(order)  # idempotent
                 except Order.DoesNotExist:
                     logger.warning("Webhook for unknown order_id=%s", order_id)
     except Exception as e:
@@ -89,24 +83,43 @@ def stripe_webhook(request):
 
 def checkout_success(request):
     """
-    Payment success page. Clears server-side session cart.
-    Expects ?order=<id>
+    Success page:
+    - makes sure invoice exists
+    - provides invoice_url for View/Download/Print
+    - provides navigation back to Home and to Menu
     """
     oid = request.GET.get("order")
     order = None
+    invoice_url = None
+
     if oid:
         try:
             order = Order.objects.get(pk=oid)
         except Order.DoesNotExist:
             order = None
 
+    if order:
+        try:
+            # ensure invoice exists even if webhook race
+            if not getattr(order, "invoice_pdf", None) or not order.invoice_pdf:
+                save_invoice_pdf_file(order)
+            if getattr(order, "invoice_pdf", None) and order.invoice_pdf:
+                invoice_url = order.invoice_pdf.url
+        except Exception:
+            pass
+
+    # Clear session cart after success
     try:
         request.session["cart"] = []
         request.session.modified = True
     except Exception:
         pass
 
-    return render(request, "payments/checkout_success.html", {"order": order})
+    return render(
+        request,
+        "payments/checkout_success.html",
+        {"order": order, "invoice_url": invoice_url},
+    )
 
 
 def checkout_cancel(request):

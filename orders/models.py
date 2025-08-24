@@ -46,7 +46,7 @@ class Order(models.Model):
     stripe_payment_intent_id = models.CharField(max_length=255, blank=True, default="")
 
     # Generated PDF invoice stored in MEDIA_ROOT/orders/
-    invoice_pdf = models.FileField(upload_to="orders/", blank=True, null=True)
+    invoice_pdf = models.FileField(upload_to="invoices/", blank=True, null=True)
 
     class Meta:
         ordering = ["-created_at"]

@@ -1,0 +1,52 @@
+{% extends "storefront/base.html" %}
+{% load static %}
+{% block title %}My Orders{% endblock %}
+
+{% block content %}
+  <div class="container" style="max-width:960px;margin:24px auto;">
+    <h1>My Orders</h1>
+
+    {% if orders %}
+      <table class="table" style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr>
+            <th style="text-align:left;padding:8px;border-bottom:1px solid #eee;">#</th>
+            <th style="text-align:left;padding:8px;border-bottom:1px solid #eee;">Date</th>
+            <th style="text-align:left;padding:8px;border-bottom:1px solid #eee;">Status</th>
+            <th style="text-align:left;padding:8px;border-bottom:1px solid #eee;">Paid</th>
+            <th style="text-align:left;padding:8px;border-bottom:1px solid #eee;">Total</th>
+            <th style="text-align:left;padding:8px;border-bottom:1px solid #eee;">Invoice</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for o in orders %}
+            <tr>
+              <td style="padding:8px;border-bottom:1px solid #f5f5f5;">{{ o.id }}</td>
+              <td style="padding:8px;border-bottom:1px solid #f5f5f5;">{{ o.created_at|date:"Y-m-d H:i" }}</td>
+              <td style="padding:8px;border-bottom:1px solid #f5f5f5;">{{ o.status }}</td>
+              <td style="padding:8px;border-bottom:1px solid #f5f5f5;">
+                {% if o.payment and o.payment.is_paid %}✅{% else %}—{% endif %}
+              </td>
+              <td style="padding:8px;border-bottom:1px solid #f5f5f5;">
+                {% if o.payment %}
+                  {{ o.payment.currency|upper }} {{ o.payment.amount }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td style="padding:8px;border-bottom:1px solid #f5f5f5;">
+                {% if o.invoice_pdf %}
+                  <a href="{{ o.invoice_pdf.url }}" target="_blank" rel="noopener">PDF</a>
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>You don’t have any orders yet.</p>
+    {% endif %}
+  </div>
+{% endblock %}
