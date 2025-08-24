@@ -1,0 +1,73 @@
+{% load static %}
+
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>RMS – Simple Storefront</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="/static/storefront/styles.css" rel="stylesheet">
+</head>
+<body>
+  <header class="bar">
+    <a href="/" class="brand">RMS</a>
+    <nav>
+      <a href="/menu/">Menu</a>
+      <a href="/orders/">My Orders</a>
+      <a href="/reservations/">Reservations</a>
+      <a href="/contact/">Contact</a>
+      <a href="#" id="auth-link">Login</a>
+      <a href="/cart/">Cart (<span id="cart-count">0</span>)</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <!-- Auth Modal (unchanged core) -->
+  <div id="auth-modal" class="modal hidden" aria-hidden="true">
+    <div class="modal-box">
+      <button data-close="1" class="close">×</button>
+      <div id="auth-step-choose">
+        <h3>Welcome</h3>
+        <p>Continue as guest, or login / sign up for order history & faster checkout.</p>
+        <div class="row">
+          <button id="btn-continue-guest">Continue as Guest</button>
+          <button id="btn-go-login">Login</button>
+          <button id="btn-go-signup">Sign up</button>
+        </div>
+      </div>
+
+      <div id="auth-step-login" class="hidden">
+        <h3>Login</h3>
+        <form id="modal-login-form">
+          <input name="username" placeholder="Username" required>
+          <input type="password" name="password" placeholder="Password" required>
+          <button type="submit">Login</button>
+          <p id="modal-login-status" class="muted"></p>
+          <p><a href="#" id="link-to-signup">Need an account?</a></p>
+        </form>
+      </div>
+
+      <div id="auth-step-signup" class="hidden">
+        <h3>Sign up</h3>
+        <form id="modal-signup-form">
+          <input name="username" placeholder="Username">
+          <input name="email" placeholder="Email" required>
+          <input name="first_name" placeholder="First name">
+          <input name="last_name" placeholder="Last name">
+          <input type="password" name="password" placeholder="Password" required>
+          <button type="submit">Create account</button>
+          <p id="modal-signup-status" class="muted"></p>
+          <p><a href="#" id="link-to-login">Already have an account?</a></p>
+        </form>
+      </div>
+    </div>
+  </div>
+   <script src="{% static 'js/cart.js' %}"></script>
+
+  <script>window.page="{{ page|default:'' }}"; window.item_id={{ item_id|default:'0' }};</script>
+  <script src="/static/storefront/app.js"></script>
+</body>
+</html>

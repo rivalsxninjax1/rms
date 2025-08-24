@@ -1,0 +1,8 @@
+{% load static %}
+<!doctype html><title>Payment Success</title>
+<h1>Payment successful 🎉</h1>
+{% if order %}
+<p>Order #{{ order.id }} is paid.</p>
+{% if order.invoice_pdf %}<p><a href="{{ order.invoice_pdf.url }}">Download Invoice PDF</a></p>{% endif %}
+{% endif %}
+<script src="{% static 'js/app.js' %}"></script>

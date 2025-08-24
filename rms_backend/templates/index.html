@@ -1,0 +1,211 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>RMS Demo UI</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 24px; }
+      .row { display:flex; gap:24px; align-items:flex-start; }
+      .card { border:1px solid #ddd; border-radius:12px; padding:16px; box-shadow: 0 2px 8px rgba(0,0,0,.04); }
+      button { padding:8px 12px; border-radius:8px; border:1px solid #ccc; cursor:pointer; }
+      input, select { padding:8px; border-radius:8px; border:1px solid #ccc; }
+      .grid { display:grid; gap:12px; grid-template-columns: repeat(auto-fill,minmax(220px,1fr)); }
+      .muted { color:#666; font-size:12px; }
+      .pill { display:inline-block; padding:2px 8px; background:#f3f3f3; border-radius:999px; margin-left:8px; font-size:12px; }
+      .qty { display:flex; gap:6px; align-items:center; }
+      .divider { height:1px; background:#eee; margin:12px 0; }
+      .ok { color: #0a7f45; }
+      .err { color: #b00020; }
+      .link { color:#0a58ca; text-decoration:none; }
+    </style>
+  </head>
+  <body>
+    <h1>RMS Demo UI</h1>
+    <p class="muted">
+      JWT auth + DRF endpoints. For API docs use <a class="link" href="/api/docs/">/api/docs</a>.
+    </p>
+
+    <div class="row">
+      <div class="card" style="min-width:300px;">
+        <h3>Login</h3>
+        <div class="divider"></div>
+        <div>
+          <label>Username</label><br/>
+          <input id="u" placeholder="admin" />
+        </div>
+        <div style="margin-top:8px;">
+          <label>Password</label><br/>
+          <input id="p" type="password" placeholder="••••••••" />
+        </div>
+        <div style="margin-top:12px;">
+          <button onclick="login()">Get Token</button>
+        </div>
+        <div id="authMsg" class="muted" style="margin-top:8px;"></div>
+      </div>
+
+      <div class="card" style="flex:1;">
+        <h3>Location & Menu</h3>
+        <div class="divider"></div>
+        <div class="row" style="gap:12px;">
+          <div>
+            <label>Location</label><br/>
+            <select id="loc"></select>
+          </div>
+          <div>
+            <button onclick="loadMenu()">Load Menu</button>
+          </div>
+        </div>
+
+        <div id="menu" class="grid" style="margin-top:16px;"></div>
+      </div>
+
+      <div class="card" style="min-width:320px;">
+        <h3>Cart</h3>
+        <div class="divider"></div>
+        <div id="cart"></div>
+        <div class="divider"></div>
+        <div><strong>Total:</strong> <span id="total">0.00</span></div>
+        <div style="margin-top:12px;">
+          <button onclick="createAndPlaceOrder()">Create & Place Order</button>
+        </div>
+        <div id="orderMsg" style="margin-top:8px;"></div>
+      </div>
+    </div>
+
+    <script>
+      let jwt = null;
+      let items = [];
+      const cart = [];
+
+      function fmt(n){ return Number(n).toFixed(2); }
+
+      async function login() {
+        const res = await fetch('/api/auth/token/', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({username: document.getElementById('u').value, password: document.getElementById('p').value})
+        });
+        const data = await res.json();
+        if (data.access) {
+          jwt = data.access;
+          document.getElementById('authMsg').innerHTML = '<span class="ok">Logged in.</span>';
+          loadLocations();
+        } else {
+          document.getElementById('authMsg').innerHTML = '<span class="err">Login failed</span>';
+        }
+      }
+
+      async function loadLocations() {
+        const res = await fetch('/api/locations/');
+        const data = await res.json();
+        const sel = document.getElementById('loc');
+        sel.innerHTML = '';
+        data.results?.forEach(l => {
+          const opt = document.createElement('option');
+          opt.value = l.id;
+          opt.textContent = `${l.organization_name || ''} ${l.name}`;
+          sel.appendChild(opt);
+        });
+      }
+
+      async function loadMenu() {
+        const res = await fetch('/api/menu/items/');
+        const data = await res.json();
+        items = data.results || [];
+        const wrap = document.getElementById('menu');
+        wrap.innerHTML = '';
+        items.forEach(mi => {
+          const div = document.createElement('div');
+          div.className = 'card';
+          div.innerHTML = `
+            <div><strong>${mi.name}</strong><span class="pill">₹${mi.price}</span></div>
+            <div class="muted">${mi.category_name || ''}</div>
+            <div class="qty" style="margin-top:8px;">
+              <button onclick="addToCart(${mi.id})">Add</button>
+            </div>
+          `;
+          wrap.appendChild(div);
+        });
+      }
+
+      function addToCart(id){
+        const mi = items.find(x=>x.id===id);
+        const existing = cart.find(x=>x.id===id);
+        if (existing) existing.qty += 1;
+        else cart.push({id: mi.id, name: mi.name, price: mi.price, qty: 1});
+        renderCart();
+      }
+
+      function renderCart(){
+        const el = document.getElementById('cart');
+        el.innerHTML = '';
+        let total = 0;
+        cart.forEach((c, i)=>{
+          total += Number(c.price) * c.qty;
+          const row = document.createElement('div');
+          row.style.marginBottom = '8px';
+          row.innerHTML = `
+            <div><strong>${c.name}</strong></div>
+            <div class="qty">
+              <button onclick="chg(${i},-1)">-</button>
+              <span>${c.qty}</span>
+              <button onclick="chg(${i},1)">+</button>
+              <span class="pill">₹${fmt(c.price * c.qty)}</span>
+              <button onclick="del(${i})">Remove</button>
+            </div>
+          `;
+          el.appendChild(row);
+        });
+        document.getElementById('total').textContent = fmt(total);
+      }
+
+      function chg(i,d){ cart[i].qty = Math.max(1, cart[i].qty + d); renderCart(); }
+      function del(i){ cart.splice(i,1); renderCart(); }
+
+      async function createAndPlaceOrder(){
+        if (!jwt) { document.getElementById('orderMsg').innerHTML = '<span class="err">Login first</span>'; return; }
+        if (cart.length===0) { document.getElementById('orderMsg').innerHTML = '<span class="err">Cart empty</span>'; return; }
+
+        const location = document.getElementById('loc').value;
+
+        // 1) Create draft order
+        const orderRes = await fetch('/api/orders/', {
+          method:'POST',
+          headers:{'Content-Type':'application/json','Authorization':`Bearer ${jwt}`},
+          body: JSON.stringify({location, table_number:'T1', customer_name:'Walk-in'})
+        });
+        const order = await orderRes.json();
+        if (!order.id) { document.getElementById('orderMsg').innerHTML = '<span class="err">Failed to create order</span>'; return; }
+
+        // 2) Add items
+        for (const c of cart) {
+          await fetch('/api/order-items/', {
+            method:'POST',
+            headers:{'Content-Type':'application/json','Authorization':`Bearer ${jwt}`},
+            body: JSON.stringify({
+              order: order.id,
+              menu_item_name: c.name,
+              menu_item_price: c.price,
+              quantity: c.qty,
+              modifiers: []
+            })
+          });
+        }
+
+        // 3) Place order (calculate totals)
+        await fetch(`/api/orders/${order.id}/place/`, {
+          method:'POST',
+          headers:{'Authorization':`Bearer ${jwt}`}
+        });
+
+        document.getElementById('orderMsg').innerHTML =
+          `<span class="ok">Order #${order.id} placed. See in <a class="link" href="/admin/" target="_blank">admin</a>.</span>`;
+        cart.splice(0, cart.length);
+        renderCart();
+      }
+
+      // Preload locations on first paint for convenience
+      loadLocations().catch(()=>{});
+    </script>
+  </body>
+</html>

@@ -1,0 +1,412 @@
+# payments/services.py
+from __future__ import annotations
+
+import logging
+from decimal import Decimal
+from io import BytesIO
+from pathlib import Path
+from typing import Optional, Tuple
+
+from django.conf import settings
+from django.urls import reverse
+from django.utils import timezone
+
+import stripe
+
+from payments.models import Payment  # keep your app label as-is
+
+logger = logging.getLogger(__name__)
+
+# ---------- Stripe setup ----------
+stripe.api_key = getattr(settings, "STRIPE_SECRET_KEY", None)
+STRIPE_WEBHOOK_SECRET = getattr(settings, "STRIPE_WEBHOOK_SECRET", None)
+DEFAULT_CURRENCY = (getattr(settings, "STRIPE_CURRENCY", "npr") or "npr").lower()
+
+
+# ---------- Helpers ----------
+def _domain() -> str:
+    """
+    Robust domain resolver:
+      1) settings.DOMAIN or settings.SITE_URL
+      2) http(s)://<ALLOWED_HOSTS[0]> (https if SECURE_SSL_REDIRECT)
+      3) http://localhost:8000
+    """
+    dom = getattr(settings, "DOMAIN", None) or getattr(settings, "SITE_URL", None)
+    if not dom:
+        host = None
+        try:
+            hosts = getattr(settings, "ALLOWED_HOSTS", []) or []
+            if hosts:
+                host = hosts[0]
+        except Exception:
+            host = None
+        if host:
+            scheme = "https" if getattr(settings, "SECURE_SSL_REDIRECT", False) else "http"
+            dom = f"{scheme}://{host}"
+        else:
+            dom = "http://localhost:8000"
+    return dom.rstrip("/")
+
+
+def _order_amount(order) -> Decimal:
+    """
+    Amount source of truth:
+     - If order.total exists and is not None → use it
+     - Else compute from Order.items (unit_price * qty) with safe fallbacks
+    """
+    if hasattr(order, "total") and getattr(order, "total", None) is not None:
+        try:
+            return Decimal(str(order.total))
+        except Exception:
+            pass
+
+    total = Decimal("0")
+    try:
+        for it in getattr(order, "items", []).all():
+            try:
+                line = getattr(it, "line_total", None)
+                if line is None:
+                    unit = getattr(it, "unit_price", Decimal("0")) or Decimal("0")
+                    qty = int(getattr(it, "quantity", 1) or 1)
+                    line = Decimal(unit) * Decimal(qty)
+                total += Decimal(str(line))
+            except Exception:
+                continue
+    except Exception:
+        total = Decimal("0")
+    return total
+
+
+def _ensure_payment(order, amount: Decimal, currency: str) -> Payment:
+    """
+    Ensure a Payment row exists & is synced with the latest amount/currency.
+    Does not assume presence of any Stripe-specific columns.
+    """
+    pay, _ = Payment.objects.get_or_create(
+        order=order,
+        defaults={
+            "amount": amount,
+            "currency": currency.upper(),
+            "provider": "stripe",
+            "status": "pending",
+        },
+    )
+    try:
+        pay.amount = amount
+        pay.currency = currency.upper()
+        pay.provider = "stripe"
+        pay.status = getattr(pay, "status", None) or "pending"
+        pay.save()
+    except Exception:
+        # tolerate custom schema differences
+        pass
+    return pay
+
+
+def _store_stripe_refs(pay: Payment, session: Optional[stripe.checkout.Session] = None) -> None:
+    """
+    If your Payment model has stripe_session_id / stripe_payment_intent fields,
+    store them here safely.
+    """
+    changed = False
+    if session is not None:
+        if hasattr(pay, "stripe_session_id"):
+            try:
+                pay.stripe_session_id = session.id
+                changed = True
+            except Exception:
+                pass
+        if hasattr(pay, "stripe_payment_intent"):
+            try:
+                intent = getattr(session, "payment_intent", "") or ""
+                pay.stripe_payment_intent = str(intent)  # may already be str
+                changed = True
+            except Exception:
+                pass
+
+    if changed:
+        try:
+            pay.save()
+        except Exception:
+            pass
+
+
+# ---------- Public API used by orders/views.py ----------
+def create_checkout_session(order) -> stripe.checkout.Session:
+    """
+    Creates a Stripe Checkout Session and ensures a Payment row exists/updated.
+    Returns the Stripe Session object (has .url for redirect).
+    """
+    if not stripe.api_key:
+        logger.error("Stripe secret key missing. Set STRIPE_SECRET_KEY in settings/.env")
+        raise RuntimeError("Stripe is not configured")
+
+    amount = _order_amount(order)  # Decimal
+    amount_minor = max(1, int(Decimal(amount) * 100))  # Stripe expects smallest currency unit
+    currency = DEFAULT_CURRENCY
+
+    success_url = f"{_domain()}{reverse('payments:success')}?order_id={order.id}"
+    cancel_url = f"{_domain()}{reverse('payments:cancel')}?order_id={order.id}"
+
+    # Minimal description
+    description = f"Order #{order.id}"
+    try:
+        first = order.items.first()
+        if first and getattr(first, "product_name", None):
+            description = f"{first.product_name} and more"
+    except Exception:
+        pass
+
+    # Create a single line-item session (you can expand to per-line items later)
+    session = stripe.checkout.Session.create(
+        mode="payment",
+        payment_method_types=["card"],
+        success_url=success_url,
+        cancel_url=cancel_url,
+        line_items=[
+            {
+                "price_data": {
+                    "currency": currency,
+                    "product_data": {"name": description},
+                    "unit_amount": amount_minor,
+                },
+                "quantity": 1,
+            }
+        ],
+        metadata={"order_id": str(order.id)},
+    )
+
+    pay = _ensure_payment(order, amount=amount, currency=currency)
+    _store_stripe_refs(pay, session=session)
+
+    return session
+
+
+# ---------- Webhook processing ----------
+def process_stripe_webhook(payload: bytes, sig_header: str) -> Tuple[Optional[str], Optional[Payment]]:
+    """
+    Verify and process a Stripe webhook.
+    Returns (event_type, Payment|None).
+    Call this from your view that handles /stripe/webhook/.
+    """
+    if not STRIPE_WEBHOOK_SECRET:
+        logger.error("STRIPE_WEBHOOK_SECRET not set; cannot verify webhook")
+        raise RuntimeError("Stripe webhook secret missing")
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload=payload,
+            sig_header=sig_header,
+            secret=STRIPE_WEBHOOK_SECRET,
+        )
+    except stripe.error.SignatureVerificationError as e:
+        logger.warning("Stripe webhook signature verification failed: %s", e)
+        raise
+    except Exception as e:
+        logger.exception("Stripe webhook parsing failed: %s", e)
+        raise
+
+    evt_type = event["type"]
+    data = event["data"]["object"]
+
+    order_id: Optional[str] = None
+    session_id: Optional[str] = None
+    payment_intent_id: Optional[str] = None
+
+    # checkout.session.completed
+    if evt_type.startswith("checkout.session"):
+        session_id = data.get("id")
+        payment_intent_id = data.get("payment_intent") or None
+        md = data.get("metadata") or {}
+        order_id = md.get("order_id")
+
+    # payment_intent.succeeded / .payment_failed etc.
+    if evt_type.startswith("payment_intent"):
+        payment_intent_id = data.get("id")
+        md = data.get("metadata") or {}
+        order_id = order_id or md.get("order_id")
+
+    if not order_id:
+        logger.warning("Stripe webhook without order_id metadata")
+        return evt_type, None
+
+    # Resolve Order/Payment
+    from orders.models import Order  # local import to avoid circulars
+    try:
+        order = Order.objects.get(pk=int(order_id))
+    except Exception:
+        logger.warning("Order %s not found for webhook", order_id)
+        return evt_type, None
+
+    pay = _ensure_payment(order, amount=_order_amount(order), currency=DEFAULT_CURRENCY)
+
+    # Mark as paid on success events
+    if evt_type in ("checkout.session.completed", "payment_intent.succeeded"):
+        try:
+            _mark_order_paid(order, pay, payment_intent_id=payment_intent_id, session_id=session_id)
+        except Exception:
+            logger.exception("Failed updating order/payment after success event")
+
+    return evt_type, pay
+
+
+def _mark_order_paid(order, pay: Payment, *, payment_intent_id: Optional[str], session_id: Optional[str]) -> None:
+    """
+    Internal: mark order as paid and store Stripe refs if fields exist.
+    """
+    # Update Payment
+    changed = False
+    try:
+        pay.status = "succeeded"
+        changed = True
+    except Exception:
+        pass
+
+    if payment_intent_id and hasattr(pay, "stripe_payment_intent"):
+        try:
+            pay.stripe_payment_intent = payment_intent_id
+            changed = True
+        except Exception:
+            pass
+
+    if session_id and hasattr(pay, "stripe_session_id"):
+        try:
+            pay.stripe_session_id = session_id
+            changed = True
+        except Exception:
+            pass
+
+    if changed:
+        try:
+            pay.save()
+        except Exception:
+            pass
+
+    # Update Order (if those fields exist)
+    order_changed = False
+    for fname, value in (
+        ("is_paid", True),
+        ("status", "PAID"),
+        ("paid_at", timezone.now()),
+    ):
+        if hasattr(order, fname):
+            try:
+                setattr(order, fname, value)
+                order_changed = True
+            except Exception:
+                pass
+
+    if order_changed:
+        try:
+            order.save()
+        except Exception:
+            pass
+
+    # Try generating &/or saving invoice
+    try:
+        # generate in-memory (for emailing, attachments, etc.)
+        _ = generate_order_invoice_pdf(order)
+        # optional: save to disk for later downloads
+        save_invoice_pdf_file(order)
+    except Exception:
+        logger.exception("Invoice generation failed for order %s", order.id)
+
+
+# ---------- Invoice generation ----------
+def generate_order_invoice_pdf(order) -> bytes:
+    """
+    Generate a simple PDF invoice in-memory (bytes).
+    If reportlab is unavailable, returns a tiny fallback "PDF-like" text bytes.
+    """
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas
+
+        buf = BytesIO()
+        c = canvas.Canvas(buf, pagesize=A4)
+        w, h = A4
+
+        y = h - 40
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(40, y, f"Invoice - Order #{order.id}")
+        y -= 25
+
+        c.setFont("Helvetica", 10)
+        c.drawString(40, y, f"Date: {timezone.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        y -= 15
+        if hasattr(order, "customer_name"):
+            c.drawString(40, y, f"Customer: {getattr(order, 'customer_name', '')}")
+            y -= 15
+        if hasattr(order, "customer_email"):
+            c.drawString(40, y, f"Email: {getattr(order, 'customer_email', '')}")
+            y -= 15
+        if hasattr(order, "customer_phone"):
+            c.drawString(40, y, f"Phone: {getattr(order, 'customer_phone', '')}")
+            y -= 25
+
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(40, y, "Items")
+        y -= 18
+
+        c.setFont("Helvetica", 10)
+        total = Decimal("0")
+        try:
+            for it in order.items.all():
+                qty = int(getattr(it, "quantity", 1) or 1)
+                name = getattr(it, "product_name", "Item")
+                unit = Decimal(str(getattr(it, "unit_price", "0") or "0"))
+                line_total = getattr(it, "line_total", None)
+                if line_total is None:
+                    line_total = unit * qty
+                total += Decimal(str(line_total))
+                c.drawString(50, y, f"{name}  x{qty}  NPR {unit}  = {line_total}")
+                y -= 14
+        except Exception:
+            pass
+
+        y -= 10
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(40, y, f"Total: NPR {total}")
+        c.showPage()
+        c.save()
+
+        return buf.getvalue()
+    except Exception:
+        # Fallback simple payload (not a real PDF, but won't crash your flow)
+        content = f"Invoice - Order #{order.id}\nTotal: {getattr(order, 'total', '0')}"
+        return content.encode("utf-8")
+
+
+def save_invoice_pdf_file(order) -> Optional[str]:
+    """
+    Generate a PDF and save it under MEDIA_ROOT/orders/order_<id>.pdf.
+    Returns relative path if saved, else None.
+    """
+    try:
+        data = generate_order_invoice_pdf(order)
+        media_root = Path(getattr(settings, "MEDIA_ROOT", "media"))
+        out_dir = media_root / "orders"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        rel_path = f"orders/order_{order.id}.pdf"
+        full_path = out_dir / f"order_{order.id}.pdf"
+        with open(full_path, "wb") as f:
+            f.write(data)
+
+        # attach path to order if it has a field to store it
+        for fld in ("invoice_file", "invoice_path", "invoice_pdf"):
+            if hasattr(order, fld):
+                try:
+                    setattr(order, fld, rel_path)
+                    order.save(update_fields=[fld])
+                    break
+                except Exception:
+                    try:
+                        setattr(order, fld, rel_path)
+                        order.save()
+                        break
+                    except Exception:
+                        pass
+        return rel_path
+    except Exception:
+        logger.exception("Failed saving invoice PDF for order %s", getattr(order, "id", "?"))
+        return None

@@ -1,0 +1,8 @@
+{% extends "storefront/base.html" %}
+{% block title %}Checkout – RMS{% endblock %}
+{% block content %}
+  <h1>Checkout</h1>
+  <form id="order-form"><button id="pay-now" type="submit" style="display:none;">Pay now</button></form>
+  <p id="order-status" class="muted"></p>
+  <div id="cart"></div>
+{% endblock %}

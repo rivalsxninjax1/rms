@@ -1,0 +1,26 @@
+{% load static %}
+
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Payment Success</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+  </head>
+  <body>
+    <h1>Payment successful 🎉</h1>
+    {% if order %}
+      <p>Order #{{ order.id }} is paid.</p>
+      {% if order.invoice_pdf %}
+        <p><a href="{{ order.invoice_pdf.url }}">Download Invoice PDF</a></p>
+      {% endif %}
+    {% endif %}
+
+    <script>
+      // Clear local cart after successful payment
+      try { localStorage.removeItem('cart'); } catch (_) {}
+    </script>
+    <script src="{% static 'js/cart.js' %}"></script>
+
+  </body>
+</html>

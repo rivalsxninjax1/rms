@@ -1,0 +1,25 @@
+# Core
+Django==5.1.2
+django-filter==24.3
+django-cors-headers==4.4.0
+whitenoise==6.7.0
+
+# DRF + JWT + OpenAPI
+djangorestframework==3.15.2
+djangorestframework-simplejwt==5.3.1
+drf-spectacular==0.27.2
+
+# PostgreSQL driver (psycopg3, binary wheels)
+psycopg[binary]==3.2.9
+
+# Prod web server
+gunicorn==22.0.0
+
+# Images & utils
+Pillow==11.0.0
+python-decouple==3.8
+
+celery[redis]==5.4.0
+python-dotenv==1.0.1
+stripe==10.5.0
+channels==4.1.0
