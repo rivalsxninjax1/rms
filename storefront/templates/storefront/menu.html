@@ -1,6 +1,61 @@
+<!-- FILE: storefront/templates/storefront/menu_item.html -->
 {% extends "storefront/base.html" %}
-{% block title %}Menu – RMS{% endblock %}
+{% load static %}
+{% block title %}{% if item %}{{ item.name }}{% else %}Menu Item{% endif %} – {{ SITE_NAME|default:"RMS" }}{% endblock %}
+
 {% block content %}
-  <h1>Menu</h1>
-  <div id="menu-grid" class="grid"></div>
+  <div class="container" style="max-width:960px;margin:24px auto;">
+    <a href="{% url 'storefront:menu' %}" style="text-decoration:none;">⬅ Back to Menu</a>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:16px;">
+      <div>
+        <div style="aspect-ratio:4/3;background:#f7f7f7;display:flex;align-items:center;justify-content:center;border-radius:12px;overflow:hidden;">
+          {% if item and item.image %}
+            <img src="{{ item.image.url }}" alt="{{ item.name }}" style="width:100%;height:100%;object-fit:cover;">
+          {% else %}
+            <img src="{% static 'storefront/img/placeholder.jpg' %}" alt="" style="width:60%;opacity:.6;">
+          {% endif %}
+        </div>
+      </div>
+
+      <div>
+        <h1 style="margin:0 0 10px;">{% if item %}{{ item.name }}{% else %}Item{% endif %}</h1>
+
+        <div style="margin:8px 0 16px;">
+          <strong style="font-size:18px;">
+            {% if item %}
+              {{ DEFAULT_CURRENCY|default:"NPR" }} {{ item.price }}
+            {% else %}
+              {{ DEFAULT_CURRENCY|default:"NPR" }} —
+            {% endif %}
+          </strong>
+        </div>
+
+        <p style="color:#555;white-space:pre-line;">
+          {% if item and item.description %}
+            {{ item.description }}
+          {% else %}
+            No description available.
+          {% endif %}
+        </p>
+
+        {% if item %}
+          <div style="margin-top:16px;display:flex;gap:10px;">
+            <button
+              type="button"
+              class="btn btn-primary add-to-cart"
+              data-id="{{ item.id }}"
+              data-name="{{ item.name|escape }}"
+              data-price="{{ item.price }}"
+              data-image="{% if item.image %}{{ item.image.url }}{% endif %}"
+            >Add to Cart</button>
+            <a href="{% url 'storefront:cart' %}" class="btn btn-secondary">Go to Cart</a>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <script>window.DEFAULT_CURRENCY="{{ DEFAULT_CURRENCY|default:'NPR' }}";</script>
+  <!-- (Do not load app.js here; it's loaded in base.html) -->
 {% endblock %}

@@ -11,22 +11,14 @@
       {% else %}
         <p style="margin:0 0 6px;">Payment received. Thank you!</p>
       {% endif %}
-
       <div style="margin:16px 0;">
         {% if invoice_url %}
-          <a id="viewInvoice" href="{{ invoice_url }}" target="_blank" rel="noopener" class="btn btn-secondary" style="margin-right:8px;">
-            View / Download Invoice (PDF)
-          </a>
-          <button id="printInvoice" class="btn btn-primary">Print Invoice</button>
-          <iframe id="invoiceFrame" src="{{ invoice_url }}" style="display:none;"></iframe>
-        {% else %}
-          <p><em>Invoice will be available shortly. Please refresh this page after a moment.</em></p>
+          <a href="{{ invoice_url }}" class="btn">Download Invoice (PDF)</a>
+        {% elif order and order.invoice_pdf %}
+          <a href="{{ order.invoice_pdf.url }}" class="btn">Download Invoice (PDF)</a>
         {% endif %}
       </div>
-
-      <hr style="margin:20px 0; border:0; border-top:1px solid #eee;">
-
-      <div>
+      <div style="margin-top:12px;">
         <a href="{% url 'storefront:my_orders' %}" class="btn">Go to My Orders</a>
         <a href="{% url 'storefront:menu' %}" class="btn btn-secondary" style="margin-left:8px;">Continue Shopping</a>
       </div>
@@ -34,10 +26,11 @@
   </div>
 
   <script>
-    // Clear browser cart + update badge
+    // Clear ONLY on success
     try {
+      fetch("/api/orders/cart/reset_session/", { method:"POST", credentials:"include" }).catch(()=>{});
       localStorage.removeItem("cart");
-      if (typeof updateCartBadge === "function") updateCartBadge();
+      localStorage.removeItem("applied_coupon");
     } catch (e) {}
   </script>
 {% endblock %}

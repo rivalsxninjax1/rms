@@ -1,6 +1,7 @@
+<!-- FILE: storefront/templates/storefront/cart.html -->
 {% extends "storefront/base.html" %}
-{% load static %}
-{% block title %}Cart – RMS{% endblock %}
+{% block title %}Your Cart{% endblock %}
+
 {% block content %}
   <h1>Your Cart</h1>
   <div id="cart-items"></div>
@@ -9,7 +10,5 @@
     <button id="pay-btn" class="btn btn-primary" disabled>Pay with Card</button>
   </div>
 
-  <!-- Existing app.js renders the cart items; cart-pay.js only handles payment -->
-  <script src="{% static 'storefront/app.js' %}"></script>
-  <script src="{% static 'storefront/cart-pay.js' %}"></script>
+  <!-- Existing app.js renders items; cart-pay.js only handles payment -->
 {% endblock %}

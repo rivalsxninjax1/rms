@@ -1,3 +1,4 @@
+<!-- FILE: storefront/templates/storefront/base.html -->
 {% load static %}
 <!doctype html>
 <html lang="en">
@@ -17,6 +18,7 @@
       <a href="/reservations/">Reservations</a>
       <a href="/contact/">Contact</a>
       <a href="#" id="auth-link">Login</a>
+      <a href="#" id="nav-logout" data-logout>Logout</a>
       <a href="/cart/">Cart (<span id="cart-count">0</span>)</a>
     </nav>
   </header>
@@ -25,53 +27,96 @@
     {% block content %}{% endblock %}
   </main>
 
-  <!-- Auth Modal -->
+  <!-- Auth Modal (Card UI) -->
   <div id="auth-modal" class="modal hidden" aria-hidden="true">
-    <div class="modal-box">
-      <button data-close="1" class="close">×</button>
+    <div class="modal-backdrop"></div>
+    <div class="modal-card auth-card" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+      <button id="auth-close" class="modal-close" aria-label="Close">&times;</button>
 
-      <div id="auth-step-choose">
-        <h3>Welcome</h3>
-        <p>Login / Sign up for order history & faster checkout.</p>
-        <div class="row">
-          <button id="btn-go-login">Login</button>
-          <button id="btn-go-signup">Sign up</button>
+      <div id="auth-step-choice">
+        <h3 id="auth-title" class="card-title">Welcome</h3>
+        <p class="muted">Sign in to complete your purchase</p>
+        <div class="stack">
+          <button id="btn-open-login" class="btn btn-primary">Login</button>
+          <button id="btn-open-signup" class="btn">Create Account</button>
         </div>
       </div>
 
       <div id="auth-step-login" class="hidden">
-        <h3>Login</h3>
-        <form id="modal-login-form">
-          <input name="username" placeholder="Username or Email" required />
-          <input type="password" name="password" placeholder="Password" required />
-          <button type="submit">Login</button>
-          <p id="modal-login-status" class="muted"></p>
-          <p><a href="#" id="link-to-signup">Need an account?</a></p>
+        <h3 class="card-title">Login</h3>
+        <form id="modal-login-form" class="form">
+          <label>Username or Email</label>
+          <input name="username" placeholder="you@example.com" required />
+          <label>Password</label>
+          <input type="password" name="password" placeholder="••••••••" required />
+          <button type="submit" class="btn btn-primary btn-full">Login</button>
+          <p id="modal-login-status" class="muted status"></p>
+          <p class="muted"><a href="#" id="link-to-signup">Need an account?</a></p>
         </form>
       </div>
 
       <div id="auth-step-signup" class="hidden">
-        <h3>Sign up</h3>
-        <form id="modal-signup-form">
-          <input name="username" placeholder="Username" required />
-          <input name="email" placeholder="Email" required />
-          <input name="first_name" placeholder="First name" />
-          <input name="last_name" placeholder="Last name" />
-          <input type="password" name="password" placeholder="Password" required />
-          <button type="submit">Create account</button>
-          <p id="modal-signup-status" class="muted"></p>
-          <p><a href="#" id="link-to-login">Already have an account?</a></p>
+        <h3 class="card-title">Create Account</h3>
+        <form id="modal-signup-form" class="form">
+          <label>Username</label>
+          <input name="username" placeholder="yourname" required />
+          <label>Email</label>
+          <input name="email" type="email" placeholder="you@example.com" required />
+          <div class="grid-2">
+            <div><label>First name</label><input name="first_name" /></div>
+            <div><label>Last name</label><input name="last_name" /></div>
+          </div>
+          <label>Password</label>
+          <input type="password" name="password" placeholder="At least 8 characters" required />
+          <button type="submit" class="btn btn-primary btn-full">Create account</button>
+          <p id="modal-signup-status" class="muted status"></p>
+          <p class="muted"><a href="#" id="link-to-login">Already have an account?</a></p>
         </form>
       </div>
     </div>
   </div>
 
-  <!-- Page context for app.js (optional usage) -->
+  <!-- Payment Options Modal (choose at Pay time) -->
+  <div id="pay-options-modal" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card auth-card" role="dialog" aria-modal="true" aria-labelledby="pay-title">
+      <button id="pay-close" class="modal-close" aria-label="Close">&times;</button>
+      <h3 id="pay-title" class="card-title">How would you like to proceed?</h3>
+      <form id="pay-options-form" class="form">
+        <label>Service</label>
+        <div class="stack" style="flex-direction:column; align-items:flex-start;">
+          <label><input type="radio" name="service_type" value="DINE_IN" checked /> Dine in (pay here)</label>
+          <label><input type="radio" name="service_type" value="UBEREATS" /> Uber Eats</label>
+          <label><input type="radio" name="service_type" value="DOORDASH" /> DoorDash</label>
+        </div>
+        <button type="submit" class="btn btn-primary btn-full" id="pay-continue">Continue</button>
+        <p class="muted status" id="pay-options-status"></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- Context -->
+  <script>window.page="{{ page|default:'' }}"; window.item_id={{ item_id|default:'0' }};</script>
+
+  <!-- Core scripts -->
+  <script src="{% static 'storefront/app.js' %}" defer></script>
+  <script src="{% static 'storefront/auth-modal.js' %}" defer></script>
+  <script src="{% static 'storefront/cart-bridge.js' %}" defer></script>
+  <script src="{% static 'storefront/cart-session-guard.js' %}" defer></script>
+
+  <!-- Pay flow (now with service_type picker) -->
+  <script src="{% static 'storefront/cart-pay.js' %}" defer></script>
+
+  <!-- Logout ONLY ends auth; does NOT clear cart -->
   <script>
-    window.page = "{{ page|default:'' }}";
-    window.item_id = {{ item_id|default:'0' }};
+    document.addEventListener("click", async function (e) {
+      const btn = e.target.closest("[data-logout]");
+      if (!btn) return;
+      e.preventDefault();
+      try { await fetch("/accounts/auth/logout/", { method:"POST", credentials:"include" }); } catch(e) {}
+      try { localStorage.removeItem("jwt_access"); localStorage.removeItem("jwt_refresh"); } catch(e) {}
+      window.location.href = "/";
+    });
   </script>
-<script src="{% static 'storefront/app.js' %}" defer></script>
-<script src="{% static 'storefront/cart-pay.js' %}" defer></script>
 </body>
 </html>

@@ -62,7 +62,7 @@ def whoami(request):
 class SessionLoginFromJWT(APIView):
     """
     Create a Django session from a valid JWT in the Authorization header.
-    Makes server-rendered protected pages (e.g., /my-orders/) work after JWT login.
+    Triggers user_logged_in -> cart merge via orders.signals.
     """
     permission_classes = [AllowAny]
     authentication_classes: list = []  # authenticate manually
@@ -81,6 +81,7 @@ class SessionLoginFromJWT(APIView):
         if not user or not user.is_active:
             return JsonResponse({"ok": False, "detail": "User inactive or not found"}, status=401)
 
+        # Important: use Django's default auth backend id
         login(request, user, backend="django.contrib.auth.backends.ModelBackend")
         return JsonResponse({"ok": True})
 
@@ -89,6 +90,7 @@ class SessionLoginFromJWT(APIView):
 class SessionLogout(APIView):
     """
     Log out the Django session (front-end also clears JWT).
+    DO NOT touch any cart/session keys here.
     """
     permission_classes = [AllowAny]
 

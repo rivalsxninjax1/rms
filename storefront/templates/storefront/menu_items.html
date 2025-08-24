@@ -1,3 +1,4 @@
+<!-- FILE: storefront/templates/storefront/menu_items.html -->
 {% extends "storefront/base.html" %}
 {% load static %}
 {% block title %}Menu – {{ SITE_NAME|default:"RMS" }}{% endblock %}
@@ -18,20 +19,13 @@
               {% endif %}
             </div>
           </a>
-          <div style="padding:10px 12px 14px;">
-            <h3 style="margin:0 0 6px;font-size:16px;">
-              <a href="{% url 'storefront:menu-item' item.id %}" style="text-decoration:none;color:inherit;">
-                {{ item.name }}
-              </a>
-            </h3>
-
-            {% if item.description %}
-              <p style="margin:0 0 8px;color:#555;">{{ item.description|truncatechars:90 }}</p>
-            {% endif %}
-
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-              <strong>{{ DEFAULT_CURRENCY|default:"NPR" }} {{ item.price }}</strong>
-              <div style="display:flex;gap:8px;">
+          <div style="padding:12px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <div>
+                <div style="font-weight:600;">{{ item.name }}</div>
+                <div class="muted">{{ DEFAULT_CURRENCY|default:"NPR" }} {{ item.price }}</div>
+              </div>
+              <div style="display:flex;gap:6px;">
                 <a href="{% url 'storefront:menu-item' item.id %}" class="btn btn-secondary">View</a>
                 <button
                   class="btn btn-primary add-to-cart"
@@ -55,5 +49,5 @@
   <script>
     window.DEFAULT_CURRENCY = "{{ DEFAULT_CURRENCY|default:'NPR' }}";
   </script>
-  <script src="{% static 'storefront/app.js' %}"></script>
+  <!-- (Do not load app.js here; it's loaded in base.html) -->
 {% endblock %}

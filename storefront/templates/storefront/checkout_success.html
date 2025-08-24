@@ -1,8 +1,40 @@
+{% extends "storefront/base.html" %}
 {% load static %}
-<!doctype html><title>Payment Success</title>
-<h1>Payment successful 🎉</h1>
-{% if order %}
-<p>Order #{{ order.id }} is paid.</p>
-{% if order.invoice_pdf %}<p><a href="{{ order.invoice_pdf.url }}">Download Invoice PDF</a></p>{% endif %}
-{% endif %}
-<script src="{% static 'js/app.js' %}"></script>
+{% block title %}Payment Successful{% endblock %}
+
+{% block content %}
+  <div class="container" style="max-width: 760px; margin: 24px auto;">
+    <div style="border:1px solid #e5e7eb; border-radius:12px; padding:24px;">
+      <h1 style="margin:0 0 12px;">✅ Payment Successful</h1>
+      {% if order %}
+        <p style="margin:0 0 6px;">Order <strong>#{{ order.id }}</strong> has been paid. Thank you!</p>
+      {% else %}
+        <p style="margin:0 0 6px;">Payment received. Thank you!</p>
+      {% endif %}
+
+      <div style="margin:16px 0;">
+        {% if invoice_url %}
+          <a href="{{ invoice_url }}" class="btn">Download Invoice (PDF)</a>
+        {% elif order and order.invoice_pdf %}
+          <a href="{{ order.invoice_pdf.url }}" class="btn">Download Invoice (PDF)</a>
+        {% endif %}
+      </div>
+
+      <div style="margin-top:12px;">
+        <a href="{% url 'storefront:my_orders' %}" class="btn">Go to My Orders</a>
+        <a href="{% url 'storefront:menu' %}" class="btn btn-secondary" style="margin-left:8px;">Continue Shopping</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Clear ONLY on success
+    try {
+      // Clear server-side session cart (does NOT flush session)
+      fetch("/api/orders/cart/reset_session/", { method:"POST", credentials:"include" }).catch(()=>{});
+      // Clear any local mirror if your legacy code had one
+      localStorage.removeItem("cart");
+      localStorage.removeItem("applied_coupon");
+    } catch (e) {}
+  </script>
+{% endblock %}
