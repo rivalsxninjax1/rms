@@ -1,4 +1,3 @@
-# orders/views.py
 from __future__ import annotations
 
 from decimal import Decimal
@@ -15,11 +14,34 @@ from rest_framework.decorators import action
 
 from .models import Order, OrderItem
 from menu.models import MenuItem
-from payments.services import create_checkout_session, save_invoice_pdf_file
+
+# Payments fallbacks (safe if app missing)
+try:
+    from payments.services import create_checkout_session, save_invoice_pdf_file  # type: ignore
+except Exception:  # pragma: no cover
+    def create_checkout_session(order: Order):
+        class _Dummy: url = None
+        return _Dummy()
+    def save_invoice_pdf_file(order: Order):  # noqa
+        return None
+
+# Coupons services (percent-based)
+try:
+    from coupons.services import find_active_coupon, compute_discount_for_order  # type: ignore
+except Exception:  # pragma: no cover
+    def find_active_coupon(code: str): return None
+    def compute_discount_for_order(order: Order, coupon, user):
+        return False, Decimal("0.00"), "coupon service missing"
+
+# Loyalty services (safe stubs)
+try:
+    from loyalty.services import get_available_reward_for_user, reserve_reward_for_order  # type: ignore
+except Exception:  # pragma: no cover
+    def get_available_reward_for_user(user): return None
+    def reserve_reward_for_order(reward, order: Order): return None
 
 
 # ---------- Helpers ----------
-
 def _currency() -> str:
     return getattr(settings, "STRIPE_CURRENCY", "usd").lower()
 
@@ -29,17 +51,12 @@ def _fetch_menu_item(mi_id: int) -> Tuple[str, Decimal]:
     return (mi.name, price)
 
 def _normalize_items(items_in: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Flexible input: supports {menu_item_id, quantity} or {menu_item, quantity} or {id, qty}
-    -> returns list[{id, quantity}]
-    """
     out: List[Dict[str, Any]] = []
     for raw in items_in or []:
         pid = raw.get("menu_item_id") or raw.get("menu_item") or raw.get("product") or raw.get("id")
         qty = raw.get("quantity") or raw.get("qty") or 1
         try:
-            pid = int(pid)
-            qty = int(qty)
+            pid = int(pid); qty = int(qty)
         except Exception:
             continue
         if pid > 0 and qty > 0:
@@ -50,7 +67,6 @@ def _cart_get(request) -> List[Dict[str, Any]]:
     return list(request.session.get("cart", []))
 
 def _cart_set(request, items: List[Dict[str, Any]]):
-    # IMPORTANT: never flush the whole session — only update the cart key.
     request.session["cart"] = items
     request.session.modified = True
 
@@ -58,14 +74,10 @@ def _cart_meta_get(request) -> Dict[str, Any]:
     return dict(request.session.get("cart_meta", {}))
 
 def _cart_meta_set(request, meta: Dict[str, Any]):
-    # Stores metadata like service_type. Never flushes.
     request.session["cart_meta"] = meta
     request.session.modified = True
 
 def _enrich(items: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Decimal]:
-    """
-    Enrich items with name/unit_price/line_total from DB and compute subtotal.
-    """
     enriched: List[Dict[str, Any]] = []
     subtotal = Decimal("0")
     for it in items:
@@ -80,13 +92,8 @@ def _enrich(items: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Decimal]
     return enriched, subtotal.quantize(Decimal("0.01"))
 
 
-# ---------- Cart (Session) ----------
-
+# ---------- Session Cart API ----------
 class SessionCartViewSet(viewsets.ViewSet):
-    """
-    Session-scoped cart for guests.
-    IMPORTANT: never flush the whole session here.
-    """
     permission_classes = [AllowAny]
 
     def list(self, request):
@@ -96,7 +103,6 @@ class SessionCartViewSet(viewsets.ViewSet):
         return Response({"items": enriched, "subtotal": str(subtotal), "currency": _currency(), "meta": meta})
 
     def create(self, request):
-        # Replace entire cart (no flush)
         items = _normalize_items(request.data.get("items", []))
         _cart_set(request, items)
         enriched, subtotal = _enrich(items)
@@ -132,36 +138,30 @@ class SessionCartViewSet(viewsets.ViewSet):
 
     @action(methods=["post"], detail=False, url_path="meta", permission_classes=[AllowAny])
     def set_meta(self, request):
-        """
-        Set cart meta safely (e.g., service_type). Never flush.
-        Body: { "service_type": "DINE_IN" | "UBEREATS" | "DOORDASH" | "TAKEAWAY" }
-        """
-        allowed = {"DINE_IN", "UBEREATS", "DOORDASH", "TAKEAWAY"}
+        # NOTE: use canonical "UBER_EATS"
+        allowed = {"DINE_IN", "UBER_EATS", "DOORDASH"}
         meta = _cart_meta_get(request)
         st = str(request.data.get("service_type", "")).upper().strip()
         if st and st in allowed:
             meta["service_type"] = st
+        table = request.data.get("table_number")
+        if table:
+            try:
+                meta["table_number"] = int(table)
+            except Exception:
+                pass
         _cart_meta_set(request, meta)
         return Response({"status": "ok", "meta": meta})
 
     @action(methods=["post"], detail=False, url_path="reset_session", permission_classes=[AllowAny])
     def reset_session(self, request):
-        """
-        Only clear cart-related keys; DO NOT flush the session (prevents losing sessionid cookie).
-        This is intentionally called only after successful payment.
-        """
-        request.session.pop("cart", None)
-        request.session.pop("cart_meta", None)
-        request.session.pop("applied_coupon", None)
+        for k in ("cart", "cart_meta", "applied_coupon"):
+            request.session.pop(k, None)
         request.session.modified = True
         return Response({"status": "ok"})
 
     @action(methods=["post"], detail=False, url_path="merge", permission_classes=[IsAuthenticated])
     def merge(self, request):
-        """
-        Manual merge after login (idempotent).
-        Takes the session cart and upserts into user's PENDING DB order.
-        """
         session_items = _normalize_items(_cart_get(request))
         if not session_items:
             return Response({"status": "noop", "detail": "empty session cart"})
@@ -188,35 +188,9 @@ class SessionCartViewSet(viewsets.ViewSet):
                     OrderItem.objects.create(order=order, menu_item_id=pid, quantity=qty, unit_price=unit)
         return Response({"status": "ok", "order_id": order.id})
 
-    @action(methods=["get"], detail=False, url_path="debug", permission_classes=[AllowAny])
-    def debug(self, request):
-        """
-        Dev helper to diagnose cart/session persistence.
-        GET /api/orders/cart/debug/
-        If session_key changes across page loads, your cookie/host/HTTPS settings are rotating the session.
-        """
-        sess = request.session
-        if "sess_canary" not in sess:
-            sess["sess_canary"] = "alive"
-            sess.modified = True
-        return Response({
-            "session_key": getattr(sess, "session_key", None),
-            "has_canary": "sess_canary" in sess,
-            "cart_len": len(sess.get("cart", [])),
-            "cart_meta": sess.get("cart_meta", {}),
-            "user": getattr(request.user, "id", None),
-            "host": request.get_host(),
-            "cookies_seen": sorted([k for k in request.COOKIES.keys() if k.lower().startswith(("session", "csr"))]),
-        })
-
 
 # ---------- Orders (Checkout) ----------
-
 class OrderViewSet(viewsets.ModelViewSet):
-    """
-    - GET  /api/orders/         -> list (auth only)
-    - POST /api/orders/         -> create checkout order. Prefer user's PENDING DB cart.
-    """
     queryset = Order.objects.all().order_by("-id")
 
     def get_permissions(self):
@@ -257,12 +231,17 @@ class OrderViewSet(viewsets.ModelViewSet):
                     "unit_price": str(it.unit_price),
                     "line_total": str(line_total),
                 })
-            total = sum(Decimal(x["line_total"]) for x in items)
+            total = o.grand_total()
             data.append({
                 "id": o.id,
-                "status": getattr(o, "status", "PENDING"),
-                "is_paid": getattr(o, "is_paid", False),
-                "service_type": getattr(o, "service_type", ""),
+                "status": o.status,
+                "is_paid": o.is_paid,
+                "source": o.source,
+                "table_number": o.table_number,
+                "external_order_id": o.external_order_id,
+                "tip_amount": str(o.tip_amount),
+                "discount_amount": str(o.discount_amount),
+                "discount_code": o.discount_code,
                 "items": items,
                 "total": str(total),
                 "created_at": timezone.localtime(getattr(o, "created_at", timezone.now())),
@@ -272,20 +251,27 @@ class OrderViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         """
         Build an Order for checkout:
-          - If authenticated and a PENDING order exists -> reuse it (DB cart)
+          - If authenticated and a PENDING order exists -> reuse it
           - Else build from session cart or request.data.items
-        Never clear the cart here. Cart is cleared only after successful payment.
+          - Apply: source + table + tip + coupon + loyalty
+          - Return Stripe Checkout session URL
         """
         user = getattr(request, "user", None)
 
-        # Determine service_type priority: body > session cart_meta > default
-        allowed = {"DINE_IN", "UBEREATS", "DOORDASH", "TAKEAWAY"}
-        req_service_type = str(request.data.get("service_type", "")).upper().strip()
+        # ---- Parse incoming options
+        body_source = (request.data.get("service_type") or request.data.get("source") or "").upper().strip()
+        if body_source not in {"DINE_IN", "UBER_EATS", "DOORDASH"}:
+            body_source = None
+        table_number = request.data.get("table_number")
+        tip_percent = request.data.get("tip_percent")
+        tip_amount_custom = request.data.get("tip_amount") or request.data.get("tip_custom")
+        coupon_code = (request.data.get("coupon") or request.data.get("coupon_code") or "").strip()
+
+        # Session defaults
         session_meta = _cart_meta_get(request)
-        service_type = (
-            req_service_type if req_service_type in allowed
-            else (session_meta.get("service_type") if session_meta.get("service_type") in allowed else "DINE_IN")
-        )
+        source = body_source or session_meta.get("service_type") or "DINE_IN"
+        if source not in {"DINE_IN", "UBER_EATS", "DOORDASH"}:
+            source = "DINE_IN"
 
         with transaction.atomic():
             order = None
@@ -296,47 +282,24 @@ class OrderViewSet(viewsets.ModelViewSet):
                     Order.objects.filter(created_by=user, status="PENDING", is_paid=False)
                     .prefetch_related("items__menu_item").first()
                 )
-                if order and order.items.exists():
-                    # subtotal computed from DB items
-                    subtotal = sum((oi.unit_price * oi.quantity) for oi in order.items.all())
-                    subtotal = Decimal(subtotal).quantize(Decimal("0.01"))
-                else:
+                if not order:
+                    order = Order(created_by=user, status="PENDING", currency=_currency())
+                    order.save()
+
+                if not order.items.exists():
                     items_source = _normalize_items(request.data.get("items", [])) or _normalize_items(_cart_get(request))
             else:
                 items_source = _normalize_items(request.data.get("items", [])) or _normalize_items(_cart_get(request))
 
-            if order is None:
-                if not items_source:
-                    return Response({"detail": "Cart is empty."}, status=400)
+            # Create items if needed
+            if items_source and (not order or not order.items.exists()):
                 enriched, subtotal = _enrich(items_source)
                 if subtotal <= 0:
-                    return Response({"detail": "Invalid cart."}, status=400)
-
-                order = Order()
-                if hasattr(order, "created_by") and user and user.is_authenticated:
-                    order.created_by = user
-                if hasattr(order, "currency"):
-                    order.currency = _currency()
-                if hasattr(order, "status"):
-                    order.status = "PENDING"
-                if hasattr(order, "is_paid"):
-                    try:
-                        order.is_paid = False
-                    except Exception:
-                        pass
-                if hasattr(order, "service_type"):
-                    order.service_type = service_type
-
-                # total field
-                for tf in ("total", "total_amount", "grand_total", "amount", "subtotal"):
-                    if hasattr(order, tf):
-                        try:
-                            setattr(order, tf, subtotal)
-                            break
-                        except Exception:
-                            pass
-                order.save()
-
+                    return Response({"detail": "Cart is empty."}, status=400)
+                if not order:
+                    order = Order(status="PENDING", currency=_currency())
+                    order.save()
+                order.items.all().delete()
                 for it in enriched:
                     OrderItem.objects.create(
                         order=order,
@@ -344,62 +307,77 @@ class OrderViewSet(viewsets.ModelViewSet):
                         quantity=int(it["quantity"]),
                         unit_price=Decimal(str(it["unit_price"])),
                     )
-            else:
-                # sync totals and service_type on existing PENDING order
-                total_calc = Decimal("0")
-                for oi in order.items.all():
-                    total_calc += (oi.unit_price * oi.quantity)
-                for tf in ("total", "total_amount", "grand_total", "amount", "subtotal"):
-                    if hasattr(order, tf):
-                        try:
-                            setattr(order, tf, total_calc.quantize(Decimal("0.01")))
-                            break
-                        except Exception:
-                            pass
-                if hasattr(order, "currency"):
-                    order.currency = _currency()
-                if hasattr(order, "service_type"):
-                    order.service_type = service_type
-                order.save()
 
-            # save a draft invoice (optional pre-payment)
+            # Set meta/source/table
+            order.source = source
+            if source == "DINE_IN":
+                if table_number is None:
+                    table_number = session_meta.get("table_number")
+                if table_number:
+                    try:
+                        order.table_number = int(table_number)
+                    except Exception:
+                        pass
+
+            order.currency = _currency()
+            order.sync_subtotals()
+
+            # ---- Tips
+            tip_dec = Decimal("0.00")
+            if tip_amount_custom not in (None, "", 0, "0"):
+                try:
+                    tip_dec = Decimal(str(tip_amount_custom))
+                except Exception:
+                    tip_dec = Decimal("0.00")
+            elif tip_percent not in (None, "", 0, "0"):
+                try:
+                    pct = Decimal(str(tip_percent)) / Decimal("100")
+                    tip_dec = (order.subtotal * pct).quantize(Decimal("0.01"))
+                except Exception:
+                    tip_dec = Decimal("0.00")
+            order.tip_amount = tip_dec
+
+            # ---- Coupon (percent-based)
+            order.discount_amount = Decimal("0.00")
+            order.discount_code = ""
+            if coupon_code:
+                c = find_active_coupon(coupon_code)
+                ok, disc, _reason = compute_discount_for_order(order, c, user)
+                if ok:
+                    order.discount_amount = disc
+                    order.discount_code = c.code
+
+            # ---- Loyalty (auto-apply once when available)
+            if user and user.is_authenticated and not order.loyalty_reward_applied:
+                reward = get_available_reward_for_user(user)
+                if reward:
+                    reserve_reward_for_order(reward, order)
+                    order.discount_amount = (order.discount_amount or Decimal("0.00")) + reward.as_discount_amount(order.subtotal)
+                    order.loyalty_reward_applied = True
+                    if not order.discount_code:
+                        order.discount_code = "LOYALTY"
+
+            order.full_clean()
+            order.save()
+
+            # Optional invoice generation
             try:
                 save_invoice_pdf_file(order)
             except Exception:
                 pass
 
-        # External aggregator choices presented to the client (front-end decides)
-        options = []
-        dd = getattr(settings, "DOORDASH_ORDER_URL", "") or ""
-        ue = getattr(settings, "UBEREATS_ORDER_URL", "") or ""
-        if dd:
-            options.append({"code": "DOORDASH", "label": "Order via DoorDash", "url": dd})
-        if ue:
-            options.append({"code": "UBEREATS", "label": "Order via Uber Eats", "url": ue})
-
-        # If service_type is aggregator, front-end should redirect there, not Stripe
-        checkout_url = None
-        if service_type in {"DINE_IN", "TAKEAWAY"}:
+            # Stripe Checkout
             session = create_checkout_session(order)
             checkout_url = getattr(session, "url", None) if session else None
 
-        # DO NOT clear the session cart here.
-
-        subtotal_resp = None
-        for tf in ("total", "total_amount", "grand_total", "amount", "subtotal"):
-            if hasattr(order, tf):
-                subtotal_resp = getattr(order, tf)
-                break
-
-        return Response(
-            {
-                "id": order.id,
-                "checkout_url": checkout_url,  # may be None when choosing aggregator
-                "total": str(subtotal_resp) if subtotal_resp is not None else None,
-                "currency": _currency(),
-                "eta_minutes": 15,
-                "external_options": options,
-                "service_type": service_type,
-            },
-            status=201,
-        )
+            return Response(
+                {
+                    "id": order.id,
+                    "checkout_url": checkout_url,
+                    "total": str(order.grand_total()),
+                    "currency": _currency(),
+                    "source": order.source,
+                    "table_number": order.table_number,
+                },
+                status=201,
+            )

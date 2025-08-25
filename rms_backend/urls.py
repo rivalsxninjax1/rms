@@ -6,16 +6,21 @@ from django.conf.urls.static import static
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+
+    # Coupons
     path("coupons/", include("coupons.urls")),
-    # APIs
-    path("api/", include(("accounts.urls", "accounts"), namespace="accounts")),
+
+    # Normal session endpoints for login/register/logout/whoami
+    path("accounts/", include(("accounts.urls", "accounts"), namespace="accounts_session")),
+
+    # APIs (unchanged)
     path("api/", include(("menu.urls", "menu"), namespace="menu")),
     path("api/orders/", include(("orders.urls", "orders"), namespace="orders")),
 
     # Payments
     path("payments/", include(("payments.urls", "payments"), namespace="payments")),
 
-    # Storefront
+    # Storefront pages
     path("", include(("storefront.urls", "storefront"), namespace="storefront")),
 ]
 

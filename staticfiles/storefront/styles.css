@@ -1,22 +1,11 @@
-/* --- Auth Modal Card Styles --- */
+/* --- Auth & Pay Modal Card Styles --- */
 .modal.hidden { display: none; }
 .modal { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; }
 .modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.45); backdrop-filter: blur(2px); }
-.modal-card {
-  position: relative;
-  background: #fff;
-  width: min(560px, 92vw);
-  border-radius: 16px;
-  box-shadow: 0 10px 30px rgba(0,0,0,.20);
-  padding: 22px 22px 26px;
-  z-index: 1001;
-}
+.modal-card { position: relative; background: #fff; width: min(560px, 92vw); border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,.20); padding: 22px 22px 26px; z-index: 1001; }
 .auth-card { animation: pop .18s ease-out; }
 @keyframes pop { from { transform: scale(.97); opacity: .6; } to { transform: scale(1); opacity: 1; } }
-.modal-close {
-  position: absolute; top: 10px; right: 12px; border: 0; background: transparent;
-  font-size: 22px; cursor: pointer; color: #666;
-}
+.modal-close { position: absolute; top: 10px; right: 12px; border: 0; background: transparent; font-size: 22px; cursor: pointer; color: #666; }
 .card-title { margin: 6px 0 8px; font-weight: 700; font-size: 20px; }
 .muted { color: #6b7280; font-size: 14px; }
 .status { min-height: 18px; margin-top: 8px; }
@@ -32,7 +21,7 @@
 .form input:focus { border-color: #111827; box-shadow: 0 0 0 3px rgba(17,24,39,.12); }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
-/* Header & layout (safe to keep) */
+/* Header & layout */
 .bar { background:#111; color:#fff; padding:10px 16px; display:flex; align-items:center; justify-content:space-between; }
 .bar a { color:#fff; text-decoration:none; margin-right:12px; }
 .brand { font-weight:700; }

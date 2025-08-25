@@ -35,7 +35,7 @@
       <a href="/reservations/">Reservations</a>
       <a href="/contact/">Contact</a>
 
-      <!-- Login opens modal; Logout only ends auth; DOES NOT clear cart -->
+      <!-- Login opens modal; Logout clears auth AND cart by design -->
       <a href="#" id="auth-link">Login</a>
       <a href="#" id="nav-logout" data-logout>Logout</a>
 
@@ -100,31 +100,11 @@
     window.item_id = {{ item_id|default:'0' }};
   </script>
 
-  <!-- Load once here -->
+  <!-- JS bundles -->
   <script src="{% static 'storefront/app.js' %}" defer></script>
   <script src="{% static 'storefront/cart-pay.js' %}" defer></script>
   <script src="{% static 'storefront/cart-bridge.js' %}" defer></script>
 
-  <!-- Logout ONLY ends auth/session; it does NOT clear cart (by design) -->
-  <script>
-    document.addEventListener("click", async function (e) {
-      const btn = e.target.closest("[data-logout]");
-      if (!btn) return;
-      e.preventDefault();
-      try {
-        await fetch("/accounts/auth/logout/", { method: "POST", credentials: "include" });
-      } catch (e) {}
-      // Remove only auth artifacts; KEEP cart intact.
-      try {
-        localStorage.removeItem("jwt_access");
-        localStorage.removeItem("jwt_refresh");
-      } catch (e) {}
-      window.location.href = "/";
-    });
-
-    // ⚠️ We intentionally DO NOT add any beforeunload handler that clears the cart.
-    // Cart should persist across navigation and logout.
-  </script>
-
+  <!-- Note: logout handler lives in app.js and clears cart+auth consistently -->
 </body>
 </html>

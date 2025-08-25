@@ -1,38 +1,111 @@
 # accounts/views.py
 from __future__ import annotations
 
-from django.contrib.auth import login, logout
-from django.http import JsonResponse
+import json
+from django.contrib.auth import authenticate, login, logout, get_user_model
+from django.http import JsonResponse, HttpRequest
+from django.views import View
 from django.views.decorators.http import require_GET
-from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.csrf import csrf_protect
 from django.utils.decorators import method_decorator
 
-from rest_framework import permissions, generics
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework_simplejwt.views import TokenObtainPairView
-from rest_framework_simplejwt.authentication import JWTAuthentication
-from rest_framework.permissions import AllowAny, IsAuthenticated
 
-from .serializers import (
-    RegisterSerializer,
-    EmailOrUsernameTokenObtainPairSerializer,
-)
+User = get_user_model()
 
+# --------- Helpers ---------
+def _json_body(request: HttpRequest) -> dict:
+    try:
+        return json.loads(request.body.decode("utf-8") or "{}")
+    except Exception:
+        return {}
 
-class EmailOrUsernameTokenObtainPairView(TokenObtainPairView):
-    permission_classes = [permissions.AllowAny]
-    serializer_class = EmailOrUsernameTokenObtainPairSerializer
+def _bad(msg="Invalid request", code=400):
+    return JsonResponse({"ok": False, "detail": msg}, status=code)
 
+# --------- Public (session) endpoints used by the modal ---------
 
-class RegisterView(generics.CreateAPIView):
-    permission_classes = [permissions.AllowAny]
-    serializer_class = RegisterSerializer
+@require_GET
+def whoami(request):
+    u = request.user if request.user.is_authenticated else None
+    return JsonResponse({
+        "authenticated": bool(u),
+        "id": getattr(u, "id", None),
+        "username": getattr(u, "username", "") or "",
+        "email": getattr(u, "email", "") or "",
+    })
 
+@method_decorator(csrf_protect, name="dispatch")
+class SessionLoginJSON(View):
+    """
+    POST /accounts/login/
+    Body: { "username": "...", "password": "..." }
+    Creates a Django session on success. Returns JSON.
+    """
+    def post(self, request: HttpRequest):
+        data = _json_body(request)
+        username = (data.get("username") or "").strip()
+        password = data.get("password") or ""
+        if not username or not password:
+            return _bad("Username and password required.", 400)
+
+        # Allow email as login identifier
+        user = authenticate(request, username=username, password=password)
+        if not user and "@" in username:
+            try:
+                account = User.objects.get(email__iexact=username)
+                user = authenticate(request, username=account.get_username(), password=password)
+            except User.DoesNotExist:
+                user = None
+
+        if not user:
+            return _bad("Invalid credentials.", 401)
+        if not user.is_active:
+            return _bad("User disabled.", 403)
+
+        login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+        return JsonResponse({"ok": True, "user": {"id": user.id, "username": user.get_username(), "email": user.email or ""}})
+
+@method_decorator(csrf_protect, name="dispatch")
+class RegisterJSON(View):
+    """
+    POST /accounts/register/
+    Body: { "username": "...", "email": "...", "password": "...", "first_name"?, "last_name"? }
+    Creates user, logs them in (session), returns JSON.
+    """
+    def post(self, request: HttpRequest):
+        data = _json_body(request)
+        username = (data.get("username") or "").strip()
+        email = (data.get("email") or "").strip()
+        password = data.get("password") or ""
+        first_name = (data.get("first_name") or "").strip()
+        last_name = (data.get("last_name") or "").strip()
+
+        if not username or not password or not email:
+            return _bad("username, email and password are required.", 400)
+        if User.objects.filter(username__iexact=username).exists():
+            return _bad("Username already taken.", 409)
+        if User.objects.filter(email__iexact=email).exists():
+            return _bad("Email already in use.", 409)
+
+        try:
+            user = User.objects.create_user(
+                username=username,
+                email=email,
+                password=password,
+                first_name=first_name,
+                last_name=last_name,
+            )
+        except Exception:
+            return _bad("Could not create user.", 400)
+
+        login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+        return JsonResponse({"ok": True, "user": {"id": user.id, "username": user.get_username(), "email": user.email or ""}})
 
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
-
     def get(self, request):
         u = request.user
         return Response({
@@ -43,58 +116,20 @@ class MeView(APIView):
             "last_name": getattr(u, "last_name", "") or "",
         })
 
-
-@require_GET
-def whoami(request):
+@method_decorator(csrf_protect, name="dispatch")
+class SessionLogout(View):
     """
-    Session-based check (NOT JWT). Used by the session bridge on the client.
+    POST /accounts/logout/
+    Clears cart-related keys and logs the user out.
     """
-    user = request.user if request.user.is_authenticated else None
-    return JsonResponse({
-        "authenticated": bool(user),
-        "id": getattr(user, "id", None),
-        "username": getattr(user, "username", "") or "",
-        "email": getattr(user, "email", "") or "",
-    })
-
-
-@method_decorator(csrf_exempt, name="dispatch")
-class SessionLoginFromJWT(APIView):
-    """
-    Create a Django session from a valid JWT in the Authorization header.
-    Triggers user_logged_in -> cart merge via orders.signals.
-    """
-    permission_classes = [AllowAny]
-    authentication_classes: list = []  # authenticate manually
-
     def post(self, request, *args, **kwargs):
-        authenticator = JWTAuthentication()
         try:
-            authenticated = authenticator.authenticate(request)
+            request.session.pop("cart", None)
+            request.session.pop("cart_meta", None)
+            request.session.pop("applied_coupon", None)
+            request.session.modified = True
         except Exception:
-            return JsonResponse({"ok": False, "detail": "Invalid token"}, status=401)
-
-        if not authenticated:
-            return JsonResponse({"ok": False, "detail": "No/invalid token"}, status=401)
-
-        user, _token = authenticated
-        if not user or not user.is_active:
-            return JsonResponse({"ok": False, "detail": "User inactive or not found"}, status=401)
-
-        # Important: use Django's default auth backend id
-        login(request, user, backend="django.contrib.auth.backends.ModelBackend")
-        return JsonResponse({"ok": True})
-
-
-@method_decorator(csrf_exempt, name="dispatch")
-class SessionLogout(APIView):
-    """
-    Log out the Django session (front-end also clears JWT).
-    DO NOT touch any cart/session keys here.
-    """
-    permission_classes = [AllowAny]
-
-    def post(self, request, *args, **kwargs):
+            pass
         try:
             logout(request)
         except Exception:

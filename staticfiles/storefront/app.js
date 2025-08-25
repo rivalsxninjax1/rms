@@ -3,6 +3,7 @@
  * - Add to cart allowed for guests
  * - My Orders & Checkout require login (opens modal, then resumes the action)
  * - Coupon input + discount display + server-side validation
+ * - Cart changes persist to SERVER session; UI cache uses localStorage
  */
 
 /* ===========================
@@ -50,7 +51,7 @@ async function ensureSessionFromJWT(){
 }
 
 /* ===========================
- * API with auto-refresh
+ * API with auto-refresh (for JWT-protected endpoints)
  * =========================== */
 async function _fetch(url, opts){ const res = await fetch(url, opts); let data={}; try{data=await res.json();}catch{} return {res,data}; }
 async function api(url, opts={}, retry=true){
@@ -89,11 +90,16 @@ async function api(url, opts={}, retry=true){
  * Auth modal helpers
  * =========================== */
 const modalEl = () => document.getElementById("auth-modal");
-function show(step){ ["choose","login","signup"].forEach(s=>{ const el=document.getElementById("auth-step-"+s); if(el) el.classList.toggle("hidden", s!==step);});}
+function show(step){
+  // FIX: match template id 'auth-step-choice'
+  ["choice","login","signup"].forEach(s=>{
+    const el=document.getElementById("auth-step-"+s);
+    if(el) el.classList.toggle("hidden", s!==step);
+  });
+}
 function openAuth(step="login"){
   const m=modalEl();
   if(!m){
-    // FALLBACK: if a page doesn't include the modal, redirect to server login
     const next = encodeURIComponent(window.location.pathname + window.location.search);
     window.location.href = `/accounts/login/?next=${next}`;
     return;
@@ -115,119 +121,98 @@ function requireLoginThen(doFn){
 }
 
 /* ===========================
- * Header auth state + nav
+ * Server Cart API helpers
  * =========================== */
-async function refreshHeaderAuth(){
-  // Support multiple possible IDs/classes used in templates
-  const linkLogin  = document.getElementById("nav-login") || document.getElementById("auth-link");
-  const linkLogout = document.getElementById("nav-logout");
-  const linkOrders = document.getElementById("nav-orders") || document.querySelector('a[href="/my-orders/"]');
-
-  const loggedIn = !!auth.access();
-  if (linkLogin)  linkLogin.style.display  = loggedIn ? "none" : "";
-  if (linkLogout) linkLogout.style.display = loggedIn ? "" : "none";
-  if (linkOrders) linkOrders.style.display = loggedIn ? "" : "none";
-
-  // Login button – always open modal or fallback redirect
-  if (linkLogin && !linkLogin._bound){
-    linkLogin._bound = true;
-    linkLogin.addEventListener("click", (e)=>{ e.preventDefault(); openAuth("login"); });
-  }
-  // Delegated fallbacks for any other “login-like” links
-  document.addEventListener("click", (e)=>{
-    const open = e.target.closest('[data-open-login], .js-login, a[href="/login/"], a[href="/accounts/login/"]');
-    if (open){
-      e.preventDefault();
-      openAuth("login");
-    }
+async function cartApiGet(){
+  const r = await fetch("/api/orders/cart/", { credentials: "include" });
+  if (!r.ok) return { items: [], subtotal: "0.00", currency: "NPR", meta: {} };
+  return await r.json();
+}
+async function cartApiAdd(id, qty){
+  await fetch("/api/orders/cart/items/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-CSRFToken": getCookie("csrftoken") },
+    credentials: "include",
+    body: JSON.stringify({ id, quantity: qty }),
   });
-
-  // Logout (server session + client tokens)
-  if (linkLogout && !linkLogout._bound){
-    linkLogout._bound = true;
-    linkLogout.addEventListener("click", async (e)=>{
-      e.preventDefault();
-      try { await fetch("/accounts/auth/logout/", {method:"POST", credentials:"include"}); } catch {}
-      auth.clear();
-      localStorage.removeItem("cart");
-      localStorage.removeItem("applied_coupon");
-      updateCartBadge();
-      window.location.href = "/";
-    });
-  }
-
-  // My Orders: require login, then navigate
-  if (linkOrders && !linkOrders._bound2){
-    linkOrders._bound2 = true;
-    linkOrders.addEventListener("click", (e)=>{
-      e.preventDefault();
-      requireLoginThen(async ()=>{
-        await ensureSessionFromJWT();
-        window.location.href = "/my-orders/";
-      });
-    });
-  }
+}
+async function cartApiRemove(id){
+  await fetch("/api/orders/cart/items/remove/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-CSRFToken": getCookie("csrftoken") },
+    credentials: "include",
+    body: JSON.stringify({ id }),
+  });
+}
+async function cartApiReplaceNonEmpty(items){
+  if (!Array.isArray(items) || items.length === 0) return;
+  await fetch("/api/orders/cart/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-CSRFToken": getCookie("csrftoken") },
+    credentials: "include",
+    body: JSON.stringify({ items }),
+  });
+}
+async function cartApiReset(){
+  await fetch("/api/orders/cart/reset_session/", {
+    method: "POST",
+    headers: { "X-CSRFToken": getCookie("csrftoken") },
+    credentials: "include",
+  });
+}
+async function cartApiMergeAfterLogin(){
+  await fetch("/api/orders/cart/merge/", {
+    method: "POST",
+    headers: { "X-CSRFToken": getCookie("csrftoken") },
+    credentials: "include",
+  });
 }
 
 /* ===========================
- * Cart (localStorage) + Coupons
+ * Local cache (UI only)
  * =========================== */
 const CART_KEY = "cart";
 const COUPON_KEY = "applied_coupon";
 
-function getCart(){ try{ return JSON.parse(localStorage.getItem(CART_KEY) || "[]" ); }catch{ return []; } }
-function saveCart(cart){ localStorage.setItem(CART_KEY, JSON.stringify(cart)); updateCartBadge(); }
-function cartTotal(){ return getCart().reduce((s,i)=> s + Number(i.price||0) * Number(i.qty||0), 0); }
-function updateCartBadge(){
-  const count = getCart().reduce((a,i)=> a + Number(i.qty||0), 0);
+function getCartLS(){ try{ return JSON.parse(localStorage.getItem(CART_KEY) || "[]" ); }catch{ return []; } }
+function setCartLS(cart){ localStorage.setItem(CART_KEY, JSON.stringify(cart)); updateCartBadgeFromLS(); }
+function updateCartBadgeFromLS(){
+  const count = getCartLS().reduce((a,i)=> a + Number(i.qty||0), 0);
   const el=document.getElementById("cart-count");
   if(el) el.textContent = String(count || 0);
-  const payBtn=document.getElementById("pay-btn");
-  if (payBtn) payBtn.disabled = (count === 0);
 }
 
+/* Coupon helpers */
 function getAppliedCoupon(){ try{ return JSON.parse(localStorage.getItem(COUPON_KEY) || "null"); }catch{return null;} }
 function setAppliedCoupon(c){ localStorage.setItem(COUPON_KEY, JSON.stringify(c)); }
 function clearAppliedCoupon(){ localStorage.removeItem(COUPON_KEY); }
 
-function addToCart(itemOrId, qty=1, itemFallback=null){
-  let item = typeof itemOrId === "object" && itemOrId ? itemOrId : Object.assign({ id: Number(itemOrId) }, itemFallback || {});
-  const cart = getCart();
-  const id = Number(item.id);
-  const row = cart.find(x => Number(x.id) === id);
-  if (row){
-    row.qty = Number(row.qty||0) + Number(qty||1);
-  } else {
-    cart.push({
-      id,
-      name: item.name || `Item ${id}`,
-      price: Number(item.price || 0),
-      image: item.image || null,
-      qty: Number(qty||1),
-    });
-  }
-  saveCart(cart);
-}
-
-/* Render cart + coupon input */
-function renderCart(){
+/* ===========================
+ * Render cart from SERVER and display coupon-adjusted totals
+ * =========================== */
+async function renderCart(){
   const holder = document.getElementById("cart-items") || document.getElementById("cart");
   if(!holder) return;
 
-  const cart = getCart();
-  if(!cart.length){
+  const data = await cartApiGet();
+  const items = Array.isArray(data.items) ? data.items : [];
+  const curr  = data.currency || (window.DEFAULT_CURRENCY || "NPR");
+
+  if(!items.length){
     holder.innerHTML = `<p>Your cart is empty.</p>`;
-    updateCartBadge();
+    updateCartBadgeFromLS();
+    const payBtn=document.getElementById("pay-btn");
+    if (payBtn) payBtn.disabled = true;
     return;
   }
 
-  const subtotal = cartTotal();
   const applied = getAppliedCoupon();
+  const subtotal = items.reduce((s,i)=> s + Number(i.unit_price||0) * Number(i.quantity||0), 0);
   const discount = applied ? (subtotal * (Number(applied.percent_off||0)/100)) : 0;
   const grand = Math.max(0, subtotal - discount);
 
   let html = `<div class="cart-list">`;
-  cart.forEach(i => {
+  items.forEach(i => {
     html += `
       <div class="cart-row" data-id="${i.id}" style="display:grid;grid-template-columns:72px 1fr auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid #eee;">
         <div style="width:72px;height:72px;background:#f7f7f7;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;">
@@ -235,15 +220,15 @@ function renderCart(){
         </div>
         <div>
           <div style="font-weight:600;margin-bottom:4px;">${i.name}</div>
-          <div style="color:#555;">${currency(i.price)}</div>
+          <div style="color:#555;">${currency(Number(i.unit_price||0))}</div>
           <div style="margin-top:8px;display:flex;align-items:center;gap:6px;">
             <button class="qty-dec" data-id="${i.id}" type="button">−</button>
-            <input class="qty-input" data-id="${i.id}" type="number" min="1" value="${i.qty}" style="width:60px;">
+            <input class="qty-input" data-id="${i.id}" type="number" min="1" value="${i.quantity}" style="width:60px;">
             <button class="qty-inc" data-id="${i.id}" type="button">+</button>
             <button class="remove-item" data-id="${i.id}" style="margin-left:8px;" type="button">Remove</button>
           </div>
         </div>
-        <div style="font-weight:600;">${currency(Number(i.price) * Number(i.qty))}</div>
+        <div style="font-weight:600;">${currency(Number(i.unit_price||0) * Number(i.quantity||0))}</div>
       </div>
     `;
   });
@@ -271,7 +256,7 @@ function renderCart(){
   `;
 
   holder.innerHTML = html;
-  updateCartBadge();
+  updateCartBadgeFromLS();
 }
 
 /* Apply/Remove coupon helpers */
@@ -283,7 +268,6 @@ async function applyCouponFromInput(){
   if(!code){ status && (status.textContent = "Enter a code/phrase."); return; }
 
   try{
-    // GET validate to match your backend signature here
     const res = await fetch(`/coupons/validate/?code=${encodeURIComponent(code)}`, {credentials:"include"});
     const data = await res.json().catch(()=>({}));
     if(res.ok && data && data.valid){
@@ -310,8 +294,8 @@ async function beginCheckoutFlow(){
   const btn = document.getElementById("pay-btn");
   if (!btn) { window.location.reload(); return; }
 
-  const endpoint = btn.getAttribute("data-checkout-endpoint");  // e.g. /payments/create-checkout-session/123/
-  const href     = btn.getAttribute("data-href");                // fallback
+  const endpoint = btn.getAttribute("data-checkout-endpoint");
+  const href     = btn.getAttribute("data-href");
   const applied  = getAppliedCoupon();
 
   if (endpoint){
@@ -331,8 +315,8 @@ async function beginCheckoutFlow(){
         body: JSON.stringify(payload)
       });
       const data = await res.json().catch(()=>({}));
-      if (res.ok && data && data.url){
-        window.location.href = data.url;
+      if (res.ok && data && (data.url || data.checkout_url)){
+        window.location.href = data.url || data.checkout_url;
         return;
       }
       if (href) window.location.href = href;
@@ -348,9 +332,65 @@ async function beginCheckoutFlow(){
 }
 
 /* ===========================
- * Events
+ * Header auth state + nav (clear cart on logout per your request)
  * =========================== */
-document.addEventListener("click", (e) => {
+async function refreshHeaderAuth(){
+  const linkLogin  = document.getElementById("nav-login") || document.getElementById("auth-link");
+  const linkLogout = document.getElementById("nav-logout");
+  const linkOrders = document.getElementById("nav-orders") || document.querySelector('a[href="/my-orders/"]');
+
+  const loggedIn = !!auth.access();
+  if (linkLogin)  linkLogin.style.display  = loggedIn ? "none" : "";
+  if (linkLogout) linkLogout.style.display = loggedIn ? "" : "none";
+  if (linkOrders) linkOrders.style.display = loggedIn ? "" : "none";
+
+  if (linkLogin && !linkLogin._bound){
+    linkLogin._bound = true;
+    linkLogin.addEventListener("click", (e)=>{ e.preventDefault(); openAuth("login"); });
+  }
+  document.addEventListener("click", (e)=>{
+    const open = e.target.closest('[data-open-login], .js-login, a[href="/login/"], a[href="/accounts/login/"]');
+    if (open){
+      e.preventDefault();
+      openAuth("login");
+    }
+  });
+
+  if (linkLogout && !linkLogout._bound){
+    linkLogout._bound = true;
+    linkLogout.addEventListener("click", async (e)=>{
+      e.preventDefault();
+      try {
+        await fetch("/accounts/auth/logout/", {method:"POST", credentials:"include"});
+      } catch {}
+      // Clear server-side cart and local cache ON LOGOUT (as you requested)
+      try { await cartApiReset(); } catch {}
+      try {
+        localStorage.removeItem("cart");
+        localStorage.removeItem("applied_coupon");
+        auth.clear();
+      } catch {}
+      updateCartBadgeFromLS();
+      window.location.href = "/";
+    });
+  }
+
+  if (linkOrders && !linkOrders._bound2){
+    linkOrders._bound2 = true;
+    linkOrders.addEventListener("click", (e)=>{
+      e.preventDefault();
+      requireLoginThen(async ()=>{
+        await ensureSessionFromJWT();
+        window.location.href = "/my-orders/";
+      });
+    });
+  }
+}
+
+/* ===========================
+ * Events (Add/Qty/Remove/Checkout/Coupons)
+ * =========================== */
+document.addEventListener("click", async (e) => {
   // Add-to-cart
   const btn = e.target.closest(".add-to-cart");
   if (btn){
@@ -360,8 +400,14 @@ document.addEventListener("click", (e) => {
       price: Number(btn.getAttribute("data-price") || 0),
       image: btn.getAttribute("data-image") || undefined,
     };
-    addToCart(item, 1);
-    renderCart();
+    // Update LS for immediate UI feedback
+    const ls = getCartLS();
+    const row = ls.find(x => Number(x.id) === item.id);
+    if (row){ row.qty = Number(row.qty||0) + 1; } else { ls.push({ id:item.id, name:item.name, price:item.price, image:item.image, qty:1 }); }
+    setCartLS(ls);
+    // Persist to server
+    await cartApiAdd(item.id, 1);
+    await renderCart();
   }
 
   const dec = e.target.closest(".qty-dec");
@@ -370,21 +416,33 @@ document.addEventListener("click", (e) => {
 
   if (dec){
     const id = Number(dec.getAttribute("data-id"));
-    const cart = getCart();
-    const row = cart.find(x=> Number(x.id)===id);
-    if (row){ row.qty = Math.max(1, Number(row.qty||0)-1); saveCart(cart); renderCart(); }
+    const ls = getCartLS(); const row = ls.find(x=>Number(x.id)===id);
+    if (row){
+      row.qty = Math.max(0, Number(row.qty||0)-1);
+      if (row.qty===0){
+        const nx = ls.filter(x=>Number(x.id)!==id); setCartLS(nx);
+        await cartApiRemove(id);
+      } else {
+        setCartLS(ls);
+        await cartApiAdd(id, -1);
+      }
+      await renderCart();
+    }
   }
   if (inc){
     const id = Number(inc.getAttribute("data-id"));
-    const cart = getCart();
-    const row = cart.find(x=> Number(x.id)===id);
-    if (row){ row.qty = Number(row.qty||0)+1; saveCart(cart); renderCart(); }
+    const ls = getCartLS(); const row = ls.find(x=>Number(x.id)===id);
+    if (row){
+      row.qty = Number(row.qty||0)+1; setCartLS(ls);
+      await cartApiAdd(id, 1);
+      await renderCart();
+    }
   }
   if (rem){
     const id = Number(rem.getAttribute("data-id"));
-    const cart = getCart().filter(x => Number(x.id) !== Number(id));
-    localStorage.setItem("cart", JSON.stringify(cart));
-    renderCart();
+    const nx = getCartLS().filter(x => Number(x.id) !== id); setCartLS(nx);
+    await cartApiRemove(id);
+    await renderCart();
   }
 
   // Checkout button (requires login)
@@ -394,36 +452,31 @@ document.addEventListener("click", (e) => {
     requireLoginThen(beginCheckoutFlow);
   }
 
-  // Login link (fallback)
-  const loginLink = e.target.closest("#nav-login, #auth-link, [data-open-login], .js-login");
-  if (loginLink && !auth.access()){
-    e.preventDefault();
-    openAuth("login");
-  }
-
   // Coupon apply/remove
-  if (e.target && e.target.id === "apply-coupon-btn"){
-    e.preventDefault();
-    applyCouponFromInput();
-  }
-  if (e.target && e.target.id === "remove-coupon-btn"){
-    e.preventDefault();
-    clearAppliedCoupon();
-    renderCart();
-  }
+  if (e.target && e.target.id === "apply-coupon-btn"){ e.preventDefault(); applyCouponFromInput(); }
+  if (e.target && e.target.id === "remove-coupon-btn"){ e.preventDefault(); clearAppliedCoupon(); renderCart(); }
 });
 
-document.addEventListener("input", (e) => {
+document.addEventListener("input", async (e) => {
   const qty = e.target.closest(".qty-input");
   if (qty){
     const id = Number(qty.getAttribute("data-id"));
-    const cart = getCart();
-    const row = cart.find(x => Number(x.id) === id);
-    if (row){
-      row.qty = Math.max(1, Number(qty.value || 1));
-      saveCart(cart);
-      renderCart();
+    let n = Math.max(1, Number(qty.value || 1));
+    // Compute delta vs server? Easier: remove then add n times; but to reduce calls:
+    // We'll read LS, sync delta.
+    const ls = getCartLS();
+    let row = ls.find(x => Number(x.id)===id);
+    const old = row ? Number(row.qty||1) : 0;
+    if (!row){ row = {id, qty:n}; ls.push(row); }
+    row.qty = n; setCartLS(ls);
+    const delta = n - old;
+    if (delta > 0) { await cartApiAdd(id, delta); }
+    if (delta < 0) {
+      // simulate by removing and re-adding n
+      await cartApiRemove(id);
+      if (n > 0) await cartApiAdd(id, n);
     }
+    await renderCart();
   }
 });
 
@@ -433,9 +486,13 @@ document.addEventListener("input", (e) => {
 function bindAuthModal(){
   const m=modalEl(); if(!m) return;
 
-  m.addEventListener("click", (e)=>{ if(e.target.dataset.close) closeAuth(); });
-  (document.getElementById("btn-go-login")||{}).onclick = ()=>show("login");
-  (document.getElementById("btn-go-signup")||{}).onclick = ()=>show("signup");
+  // Close button fix
+  const closeBtn = document.getElementById("auth-close");
+  if (closeBtn && !closeBtn._bound){ closeBtn._bound = true; closeBtn.addEventListener("click", ()=> closeAuth()); }
+
+  // Match template IDs: btn-open-login / btn-open-signup
+  (document.getElementById("btn-open-login")||{}).onclick = ()=>show("login");
+  (document.getElementById("btn-open-signup")||{}).onclick = ()=>show("signup");
   (document.getElementById("link-to-signup")||{}).onclick = (e)=>{ e.preventDefault(); show("signup"); };
   (document.getElementById("link-to-login")||{}).onclick = (e)=>{ e.preventDefault(); show("login"); };
 
@@ -459,6 +516,8 @@ function bindAuthModal(){
       if(r.ok && data && data.access){
         auth.set(data.access, data.refresh);
         await ensureSessionFromJWT();
+        // Merge session cart into user's DB cart after login
+        try { await cartApiMergeAfterLogin(); } catch {}
         st.textContent=""; closeAuth();
         if (typeof _pendingAction === "function"){
           const action = _pendingAction; _pendingAction=null;
@@ -499,6 +558,8 @@ function bindAuthModal(){
           if(r.ok && td.access) auth.set(td.access, td.refresh);
         }
         await ensureSessionFromJWT();
+        // Merge after signup->login
+        try { await cartApiMergeAfterLogin(); } catch {}
         st.textContent=""; closeAuth();
         if (typeof _pendingAction === "function"){
           const action = _pendingAction; _pendingAction=null;
@@ -517,13 +578,16 @@ function bindAuthModal(){
  * Boot
  * =========================== */
 document.addEventListener("DOMContentLoaded", async ()=>{
-  // If not logged in, clear cart (and any coupon) on each fresh visit
-  if (!auth.access()){
-    localStorage.removeItem("cart");
-    localStorage.removeItem("applied_coupon");
-  }
-
   bindAuthModal();
   await refreshHeaderAuth();
-  renderCart();
+
+  // DO NOT clear guest cart. If LS has items, mirror them to the server once.
+  const ls = getCartLS();
+  if (Array.isArray(ls) && ls.length > 0){
+    const items = ls.map(i => ({ id: Number(i.id), quantity: Number(i.qty||1) })).filter(i => i.id>0 && i.quantity>0);
+    try { await cartApiReplaceNonEmpty(items); } catch(e){}
+  }
+
+  updateCartBadgeFromLS();
+  await renderCart();
 });

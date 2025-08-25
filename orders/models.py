@@ -1,5 +1,10 @@
-from django.db import models
+# orders/models.py
+from __future__ import annotations
+
+from decimal import Decimal
 from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.db import models
 from menu.models import MenuItem
 
 
@@ -10,6 +15,11 @@ class Order(models.Model):
         ("FAILED", "Failed"),
         ("CANCELLED", "Cancelled"),
     ]
+    SOURCE_CHOICES = [
+        ("DINE_IN", "Dine-In"),
+        ("UBER_EATS", "Uber Eats"),
+        ("DOORDASH", "DoorDash"),
+    ]
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -18,56 +28,91 @@ class Order(models.Model):
         null=True,
         blank=True,
     )
-    location = models.ForeignKey(
-        "core.Location",
-        related_name="orders",
-        on_delete=models.SET_NULL,
+
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default="PENDING")
+    is_paid = models.BooleanField(default=False)
+    currency = models.CharField(max_length=8, default="usd")
+
+    # Ordering source & related info
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default="DINE_IN")
+    table_number = models.PositiveIntegerField(null=True, blank=True)
+    external_order_id = models.CharField(max_length=64, blank=True, default="")
+
+    # Totals
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    tip_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    discount_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    discount_code = models.CharField(max_length=64, blank=True, default="")
+    loyalty_reward_applied = models.BooleanField(default=False)
+
+    # Optional reservation relation (ok if app not installed; keep null/blank)
+    reservation = models.ForeignKey(
+        "reservations.Reservation",
         null=True,
         blank=True,
+        on_delete=models.SET_NULL,
+        related_name="orders",
     )
 
-    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="PENDING")
-    service_type = models.CharField(max_length=30, blank=True, default="")
-
-    customer_name = models.CharField(max_length=200, blank=True, default="")
-    customer_phone = models.CharField(max_length=20, blank=True, default="")
-    customer_email = models.EmailField(blank=True, default="")
-    notes = models.TextField(blank=True)
-
-    # Timestamps
+    notes = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    placed_at = models.DateTimeField(null=True, blank=True)
-    closed_at = models.DateTimeField(null=True, blank=True)
 
-    # Payment state (used by Stripe integration)
-    is_paid = models.BooleanField(default=False)
-    stripe_session_id = models.CharField(max_length=255, blank=True, default="")
-    stripe_payment_intent_id = models.CharField(max_length=255, blank=True, default="")
-
-    # Generated PDF invoice stored in MEDIA_ROOT/orders/
+    # Optional: PDF invoice file
     invoice_pdf = models.FileField(upload_to="invoices/", blank=True, null=True)
 
     class Meta:
         ordering = ["-created_at"]
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"Order #{self.pk}"
+
+    # ---------- Totals ----------
+    def items_subtotal(self) -> Decimal:
+        total = Decimal("0.00")
+        for it in self.items.all():
+            total += (Decimal(str(it.unit_price)) * int(it.quantity))
+        return total.quantize(Decimal("0.01"))
+
+    def grand_total(self) -> Decimal:
+        sub = self.items_subtotal()
+        tip = Decimal(str(self.tip_amount or 0))
+        disc = Decimal(str(self.discount_amount or 0))
+        total = sub + tip - disc
+        if total < 0:
+            total = Decimal("0.00")
+        return total.quantize(Decimal("0.01"))
+
+    def clean(self):
+        if self.source == "DINE_IN" and not self.table_number:
+            raise ValidationError("Table number is required for Dine-In orders.")
+        if self.discount_amount and self.discount_amount < 0:
+            raise ValidationError("Discount cannot be negative.")
+        if self.tip_amount and self.tip_amount < 0:
+            raise ValidationError("Tip cannot be negative.")
+
+    def sync_subtotals(self):
+        self.subtotal = self.items_subtotal()
+
+    def save(self, *args, **kwargs):
+        try:
+            self.sync_subtotals()
+        except Exception:
+            pass
+        super().save(*args, **kwargs)
 
 
 class OrderItem(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="items")
-    menu_item = models.ForeignKey(
-        MenuItem,
-        related_name="order_items",
-        on_delete=models.PROTECT,
-    )
+    menu_item = models.ForeignKey(MenuItem, related_name="order_items", on_delete=models.PROTECT)
     quantity = models.PositiveIntegerField(default=1)
     unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
-    # Optional snapshot fields (keeps your KDS/ticket ideas compatible)
+    # optional snapshots / notes
     modifiers = models.JSONField(default=list, blank=True)
     notes = models.CharField(max_length=255, blank=True, default="")
 
-    def __str__(self):
+    def line_total(self) -> Decimal:
+        return (Decimal(str(self.unit_price)) * int(self.quantity)).quantize(Decimal("0.01"))
+
+    def __str__(self) -> str:
         return f"{self.menu_item} x {self.quantity}"
