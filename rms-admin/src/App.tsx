@@ -9,7 +9,7 @@ import Orders from './pages/Orders'
 import Inventory from './pages/Inventory'
 import Reservations from './pages/Reservation'
 import Reports from './pages/Reports'
-import Settings from './pages/Settings'
+import Settings from './pages/Settings.tsx'
 
 const client = new QueryClient()
 

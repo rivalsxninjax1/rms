@@ -1,0 +1,126 @@
+{% extends "storefront/base.html" %}
+{% block title %}Reservation{% endblock %}
+
+{% block content %}
+<h1>Reserve a Table</h1>
+
+<form id="res-form" class="mb-3" style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; max-width:560px;">
+  <div>
+    <label>Date</label>
+    <input type="date" id="res-date" required class="form-control" />
+  </div>
+  <div>
+    <label>Time</label>
+    <input type="time" id="res-time" required class="form-control" />
+  </div>
+  <div style="grid-column: 1/-1;">
+    <label>Party size</label>
+    <input type="number" id="res-party" min="1" value="2" required class="form-control" />
+  </div>
+  <div style="grid-column: 1/-1;">
+    <label>Name</label>
+    <input type="text" id="res-name" required class="form-control" />
+  </div>
+  <div style="grid-column: 1/-1;">
+    <label>Phone</label>
+    <input type="tel" id="res-phone" required class="form-control" />
+  </div>
+  <div style="grid-column: 1/-1;">
+    <label>Email (optional)</label>
+    <input type="email" id="res-email" class="form-control" />
+  </div>
+</form>
+
+<div class="mb-2">
+  <span style="display:inline-block; width:12px; height:12px; background:#22c55e; border-radius:2px;"></span> Available
+  &nbsp;&nbsp;
+  <span style="display:inline-block; width:12px; height:12px; background:#ef4444; border-radius:2px;"></span> Reserved/Busy
+</div>
+
+<div id="tables-grid" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(120px,1fr)); gap:10px; max-width:960px;"></div>
+
+<div id="res-status" class="mt-2" style="color:#b00;"></div>
+
+<script>
+(function(){
+  const $ = (sel, el=document) => el.querySelector(sel);
+  const grid = $("#tables-grid");
+  const status = $("#res-status");
+  const d = $("#res-date");
+  const t = $("#res-time");
+  const party = $("#res-party");
+  const nameI = $("#res-name");
+  const phoneI = $("#res-phone");
+  const emailI = $("#res-email");
+
+  const now = new Date();
+  d.value = now.toISOString().slice(0,10);
+  t.value = new Date(now.getTime() + 30*60000).toISOString().slice(11,16);
+
+  async function loadAvailability() {
+    if (!d.value || !t.value) return;
+    const qs = new URLSearchParams({ date: d.value, time: t.value });
+    const res = await fetch(`/reserve/api/availability/?${qs.toString()}`, { credentials: "include" });
+    if (!res.ok) { status.textContent = "Unable to load availability."; return; }
+    renderGrid(await res.json());
+  }
+
+  function renderGrid(rows) {
+    grid.innerHTML = "";
+    rows.forEach(r => {
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "btn";
+      card.style.cssText = `
+        display:flex; flex-direction:column; justify-content:center; align-items:center;
+        border:1px solid #ddd; padding:12px; border-radius:8px; cursor:pointer;
+        background:${r.status === "available" ? "#22c55e" : "#ef4444"};
+        color:#fff; min-height:90px;
+      `;
+      card.disabled = r.status !== "available";
+      const wait = (r.hold_seconds && r.hold_seconds > 0) ? ` (${Math.ceil(r.hold_seconds/60)}m hold)` : "";
+      card.innerHTML = `
+        <div style="font-weight:700;">Table ${r.table_number}</div>
+        <div>Seats ${r.capacity}</div>
+        <div style="font-size:12px; opacity:.9;">${r.status.toUpperCase()}${wait}</div>
+      `;
+      card.addEventListener("click", () => confirmReservation(r));
+      grid.appendChild(card);
+    });
+  }
+
+  async function confirmReservation(row) {
+    status.style.color = "#b00";
+    status.textContent = "Booking...";
+    const payload = {
+      table_id: row.id,
+      date: d.value,
+      time: t.value,
+      party_size: parseInt(party.value || "1", 10),
+      customer_name: (nameI.value || "").trim(),
+      customer_phone: (phoneI.value || "").trim(),
+      customer_email: (emailI.value || "").trim(),
+    };
+    const res = await fetch("/reserve/api/reservations/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      status.textContent = data.detail || "Could not create reservation. Try another time/table.";
+      return;
+    }
+    status.style.color = "#166534";
+    status.textContent = "Reservation confirmed!";
+    loadAvailability();
+  }
+
+  d.addEventListener("change", loadAvailability);
+  t.addEventListener("change", loadAvailability);
+  loadAvailability();
+  setInterval(loadAvailability, 5000);
+})();
+</script>
+{% endblock %}

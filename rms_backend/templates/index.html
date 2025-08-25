@@ -169,7 +169,7 @@
         const location = document.getElementById('loc').value;
 
         // 1) Create draft order
-        const orderRes = await fetch('/api/orders/', {
+        const orderRes = await fetch('/api/orders/orders/', {
           method:'POST',
           headers:{'Content-Type':'application/json','Authorization':`Bearer ${jwt}`},
           body: JSON.stringify({location, table_number:'T1', customer_name:'Walk-in'})
@@ -193,7 +193,7 @@
         }
 
         // 3) Place order (calculate totals)
-        await fetch(`/api/orders/${order.id}/place/`, {
+        await fetch(`/api/orders/orders/${order.id}/place/`, {
           method:'POST',
           headers:{'Authorization':`Bearer ${jwt}`}
         });

@@ -58,6 +58,28 @@ INSTALLED_APPS = [
     "storefront",
 ]
 
+
+# ---------------- Celery ----------------
+# Broker & backend: Redis by default; set via env if you prefer RabbitMQ, etc.
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://127.0.0.1:6379/0")
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
+
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+# Keep Celery aligned with your Django timezone
+CELERY_TIMEZONE = locals().get("TIME_ZONE", "UTC")
+
+# Beat schedule: runs every 5 minutes
+CELERY_BEAT_SCHEDULE = {
+    "mark-no-show-reservations-every-5-minutes": {
+        "task": "reservations.tasks_portal.mark_no_show_reservations",
+        "schedule": 300.0,  # seconds
+    },
+}
+
+
+
 # ---------------- Middleware ----------------
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -184,8 +206,9 @@ CORS_ALLOW_ALL_ORIGINS = True if DEBUG else False
 def _split_space(name: str, default=""):
     return [x for x in os.getenv(name, default).split() if x]
 
-SITE_URL = os.getenv("SITE_URL", "http://localhost:8000").rstrip("/")
-DOMAIN = os.getenv("DOMAIN", SITE_URL).rstrip("/")
+# Example for local
+SITE_URL = os.getenv("SITE_URL", "http://127.0.0.1:8000")
+DOMAIN = os.getenv("DOMAIN", SITE_URL)
 
 # CSRF_TRUSTED_ORIGINS must include scheme in Django 4+
 _csrf = set()

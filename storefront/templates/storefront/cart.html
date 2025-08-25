@@ -10,5 +10,70 @@
     <button id="pay-btn" class="btn btn-primary" disabled>Pay with Card</button>
   </div>
 
+  <!-- Pay Options Modal (used by cart-pay.js) -->
+  <div id="pay-options-modal" class="hidden"
+       style="position:fixed; inset:0; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index:1000;">
+    <div style="background:#fff; width:100%; max-width:520px; padding:16px; border-radius:8px; box-shadow:0 10px 30px rgba(0,0,0,.2);">
+      <div style="display:flex; align-items:center; justify-content:space-between;">
+        <h3 style="margin:0;">Choose service type</h3>
+        <button id="pay-close" type="button" aria-label="Close" class="btn btn-light">✕</button>
+      </div>
+
+      <form id="pay-options-form" style="margin-top:12px;">
+        <fieldset style="border:0; padding:0; margin:0 0 12px;">
+          <label style="display:block; margin:6px 0;">
+            <input type="radio" name="service_type" value="DINE_IN" checked>
+            Dine-In
+          </label>
+          <label style="display:block; margin:6px 0;">
+            <input type="radio" name="service_type" value="TAKEAWAY">
+            Takeaway
+          </label>
+          <label style="display:block; margin:6px 0;">
+            <input type="radio" name="service_type" value="DELIVERY">
+            Delivery
+          </label>
+          <label style="display:block; margin:6px 0;">
+            <input type="radio" name="service_type" value="UBER_EATS">
+            Uber Eats
+          </label>
+          <label style="display:block; margin:6px 0;">
+            <input type="radio" name="service_type" value="DOORDASH">
+            DoorDash
+          </label>
+        </fieldset>
+
+        <!-- Required for Dine-In: cart-pay.js reads this by id/name -->
+        <div id="table-number-wrapper" style="margin:10px 0;">
+          <label for="table_number" style="display:block; font-weight:600;">Table # (Dine-In only)</label>
+          <input type="number" id="table_number" name="table_number" min="1" placeholder="Table #"
+                 style="width:100%; padding:8px;">
+          <small>Required when Dine-In is selected.</small>
+        </div>
+
+        <div id="pay-options-status" style="margin-top:10px; color:#b00;"></div>
+
+        <div style="margin-top:14px; display:flex; gap:8px; justify-content:flex-end;">
+          <button type="button" id="pay-close" class="btn btn-light">Cancel</button>
+          <button type="submit" class="btn btn-primary">Continue</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    // Hide table field unless Dine-In selected
+    (function(){
+      const form = document.getElementById('pay-options-form');
+      const wrap = document.getElementById('table-number-wrapper');
+      function sync(){
+        const val = (new FormData(form).get('service_type') || '').toString().toUpperCase();
+        wrap.style.display = (val === 'DINE_IN') ? 'block' : 'none';
+      }
+      form?.addEventListener('change', sync);
+      document.addEventListener('DOMContentLoaded', sync);
+    })();
+  </script>
+
   <!-- Existing app.js renders items; cart-pay.js only handles payment -->
 {% endblock %}

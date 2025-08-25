@@ -241,7 +241,7 @@ async function beginCheckoutFlow(){
     } catch { if (href) window.location.href = href; }
   } else {
     try{
-      const res = await fetch("/api/orders/", {
+      const res = await fetch("/api/orders/orders/", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": getCookie("csrftoken") },
         credentials: "include",

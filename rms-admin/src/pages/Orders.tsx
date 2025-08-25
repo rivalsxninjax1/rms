@@ -19,9 +19,9 @@ items: [
 {
 menu_item: 1,
 name: 'Margherita',
-qty: '1',
-unit_price: '9.99',
-total: '9.99',
+qty: 1,
+unit_price: 9.99,
+total: 9.99,
 },
 ],
 }

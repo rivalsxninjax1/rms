@@ -19,6 +19,7 @@ urlpatterns = [
 
     # Payments
     path("payments/", include(("payments.urls", "payments"), namespace="payments")),
+    path("reserve/", include("reservations.urls_portal", namespace="reservations_portal")),
 
     # Storefront pages
     path("", include(("storefront.urls", "storefront"), namespace="storefront")),

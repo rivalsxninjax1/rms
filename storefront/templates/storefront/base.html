@@ -32,7 +32,8 @@
     <nav>
       <a href="/menu/">Menu</a>
       <a id="nav-orders" href="{% url 'storefront:my_orders' %}" style="display:none;">My Orders</a>
-      <a href="/reservations/">Reservations</a>
+      <a href="/reserve/">Reservation</a>
+
       <a href="/contact/">Contact</a>
 
       <!-- Login opens modal; Logout clears auth AND cart by design -->
@@ -103,8 +104,7 @@
   <!-- JS bundles -->
   <script src="{% static 'storefront/app.js' %}" defer></script>
   <script src="{% static 'storefront/cart-pay.js' %}" defer></script>
-  <script src="{% static 'storefront/cart-bridge.js' %}" defer></script>
-
+ 
   <!-- Note: logout handler lives in app.js and clears cart+auth consistently -->
 </body>
 </html>
