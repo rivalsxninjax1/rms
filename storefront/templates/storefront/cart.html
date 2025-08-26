@@ -6,8 +6,7 @@
   <h1>Your Cart</h1>
   <div id="cart-items"></div>
 
-  {# If you have an "Apply Coupon" block, keep it *above* this selector.
-     This selector goes directly below coupon and *above* Pay. #}
+ 
 
   <!-- Inline Order Method (visible on cart; no default selection) -->
   <div id="order-method-inline" style="margin:16px 0;">
@@ -44,28 +43,11 @@
       </div>
 
       <form id="pay-options-form" style="margin-top:12px;">
-        <fieldset style="border:0; padding:0; margin:0 0 12px;">
-          <label style="display:block; margin:6px 0;">
-            <input type="radio" name="service_type" value="DINE_IN">
+     
+          
             Dine-In
-          </label>
-          <label style="display:block; margin:6px 0;">
-            <input type="radio" name="service_type" value="TAKEAWAY">
-            Takeaway
-          </label>
-          <label style="display:block; margin:6px 0;">
-            <input type="radio" name="service_type" value="DELIVERY">
-            Delivery
-          </label>
-          <label style="display:block; margin:6px 0;">
-            <input type="radio" name="service_type" value="UBER_EATS">
-            Uber Eats
-          </label>
-          <label style="display:block; margin:6px 0;">
-            <input type="radio" name="service_type" value="DOORDASH">
-            DoorDash
-          </label>
-        </fieldset>
+          
+        
 
         <!-- Required for Dine-In: cart-pay.js reads this by id/name -->
         <div id="table-number-wrapper" style="margin:10px 0; display:none;">
