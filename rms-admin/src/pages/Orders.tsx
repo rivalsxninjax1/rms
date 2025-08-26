@@ -12,8 +12,8 @@ setLoading(true)
 setError(null)
 setResponse(null)
 const payload: PlaceOrderInput = {
-organization: '00000000-0000-0000-0000-000000000000',
-location: '00000000-0000-0000-0000-000000000000',
+// organization: '00000000-0000-0000-0000-000000000000',
+// location: '00000000-0000-0000-0000-000000000000',
 service_type: 'DINE_IN',
 items: [
 {

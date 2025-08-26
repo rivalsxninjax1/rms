@@ -2,20 +2,10 @@
  * Pay flow with "service_type" selection. Never clears cart here.
  */
 (function () {
+  // ---------- small helpers ----------
   const $ = (sel, el=document) => el.querySelector(sel);
 
-  const payBtn = $("#pay-btn");
-  const payModal = $("#pay-options-modal");
-  const payClose = $("#pay-close"); // legacy single-id close (kept)
-  const payForm = $("#pay-options-form");
-  const payStatus = $("#pay-options-status");
-
-  function openPayModal(){ payModal?.classList.remove("hidden"); }
-  function closePayModal(){ payModal?.classList.add("hidden"); }
-
-  function isLoggedIn() { return !!(localStorage.getItem("jwt_access") || ""); }
-
-  // --- CSRF helpers ---
+  // CSRF helpers (needed for POSTs)
   function getCookie(name) {
     const value = `; ${document.cookie}`;
     const parts = value.split(`; ${name}=`);
@@ -29,7 +19,8 @@
     return headers;
   }
 
-  // === read a table number if present (supports common field names) ===
+  function isLoggedIn() { return !!(localStorage.getItem("jwt_access") || ""); }
+
   function getTableNumber() {
     const cands = [
       "#table_number", "#table-number", "[name='table_number']",
@@ -78,7 +69,7 @@
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.detail || "Failed to create order");
 
-    // Aggregators (accept both spellings, normalize to UBER_EATS)
+    // Aggregators (accept both spellings; normalize to UBER_EATS)
     const isUber = (serviceType === "UBEREATS" || serviceType === "UBER_EATS");
     if (isUber || serviceType === "DOORDASH") {
       const code = isUber ? "UBER_EATS" : serviceType;
@@ -108,54 +99,79 @@
     window.location.assign(`/payments/create-checkout-session/${orderId}/`);
   }
 
-  async function handlePay(){
-    if (!isLoggedIn()) {
-      window.__continueCheckoutAfterAuth = async () => { openPayModal(); };
-      if (typeof window.__openAuthModalForPay === "function") window.__openAuthModalForPay();
-      return;
-    }
-    openPayModal();
+  // ---------- bind after DOM is ready ----------
+  function ready(fn){
+    if (document.readyState !== "loading") fn();
+    else document.addEventListener("DOMContentLoaded", fn);
   }
 
-  // Wire Pay button
-  payBtn?.addEventListener("click", async (e) => { e.preventDefault(); await handlePay(); });
+  ready(function initCartPay() {
+    const payBtn   = $("#pay-btn");
+    const payModal = $("#pay-options-modal");
+    const payForm  = $("#pay-options-form");
+    const payStatus= $("#pay-options-status");
 
-  // Close buttons (support both legacy #pay-close and .pay-close)
-  payClose?.addEventListener("click", (e) => { e.preventDefault(); closePayModal(); });
-  document.querySelectorAll(".pay-close").forEach(btn => {
-    btn.addEventListener("click", (e) => { e.preventDefault(); closePayModal(); });
-  });
+    // modal open/close
+    function openPayModal(){ payModal?.classList.remove("hidden"); }
+    function closePayModal(){ payModal?.classList.add("hidden"); }
 
-  // Click outside modal content closes the modal (overlay click)
-  payModal?.addEventListener("mousedown", (e) => {
-    if (e.target === payModal) closePayModal();
-  });
-
-  // ESC key closes modal
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closePayModal();
-  });
-
-  // Submit chosen service type
-  payForm?.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    if (payStatus) payStatus.textContent = "Preparing checkout…";
-    try {
-      const st = (new FormData(payForm).get("service_type") || "DINE_IN").toString().toUpperCase();
-      const tableNo = getTableNumber();
-      if (st === "DINE_IN" && !tableNo) {
-        if (payStatus) payStatus.textContent = "Please enter a table number for Dine-In.";
+    // Open via Pay button
+    payBtn?.addEventListener("click", async (e) => {
+      e.preventDefault();
+      if (!isLoggedIn()) {
+        window.__continueCheckoutAfterAuth = async () => { openPayModal(); };
+        if (typeof window.__openAuthModalForPay === "function") window.__openAuthModalForPay();
         return;
       }
-      await setCartMeta(st, tableNo);
-      await createOrderAndMaybeGo(st, tableNo);
-    } catch (err) {
-      if (payStatus) payStatus.textContent = (err && err.message) || "Unable to start checkout.";
+      openPayModal();
+    });
+
+    // Robust close handling:
+    // 1) Any element with .pay-close OR legacy #pay-close
+    document.addEventListener("click", (e) => {
+      const tgt = e.target;
+      if (!tgt) return;
+      if (tgt.closest && (tgt.closest(".pay-close") || tgt.closest("#pay-close"))) {
+        e.preventDefault();
+        closePayModal();
+      }
+    });
+
+    // 2) Overlay click (click outside modal content)
+    payModal?.addEventListener("click", (e) => {
+      const content = payModal.firstElementChild; // inner dialog
+      if (!content) return;
+      if (!content.contains(e.target)) {
+        closePayModal();
+      }
+    });
+
+    // 3) ESC key
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closePayModal();
+    });
+
+    // Submit chosen service type
+    payForm?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (payStatus) payStatus.textContent = "Preparing checkout…";
+      try {
+        const st = (new FormData(payForm).get("service_type") || "DINE_IN").toString().toUpperCase();
+        const tableNo = getTableNumber();
+        if (st === "DINE_IN" && !tableNo) {
+          if (payStatus) payStatus.textContent = "Please enter a table number for Dine-In.";
+          return;
+        }
+        await setCartMeta(st, tableNo);
+        await createOrderAndMaybeGo(st, tableNo);
+      } catch (err) {
+        if (payStatus) payStatus.textContent = (err && err.message) || "Unable to start checkout.";
+      }
+    });
+
+    // After auth flow, if continuation is set to show pay modal:
+    if (typeof window.__continueCheckoutAfterAuth !== "function") {
+      window.__continueCheckoutAfterAuth = async () => { openPayModal(); };
     }
   });
-
-  // After auth flow, if continuation is set to show pay modal:
-  if (typeof window.__continueCheckoutAfterAuth !== "function") {
-    window.__continueCheckoutAfterAuth = async () => { openPayModal(); };
-  }
 })();
