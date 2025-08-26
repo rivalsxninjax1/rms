@@ -1,5 +1,8 @@
 /* storefront/static/storefront/cart-pay.js
  * Pay flow with "service_type" selection. Never clears cart here.
+ * - Preserves cart across login (backup before auth, restore after login)
+ * - Inline method radios above Pay; Pay disabled until valid selection
+ * - Dine-in immediately prompts for Table # via modal
  */
 (function () {
   // ---------- small helpers ----------
@@ -20,6 +23,53 @@
   }
 
   function isLoggedIn() { return !!(localStorage.getItem("jwt_access") || ""); }
+
+  // ---- cart backup/restore (to survive login redirects) ----
+  const LS_CART = "cart_backup_v1";
+  const LS_CHOICE = "cart_choice_v1";
+
+  async function fetchCart() {
+    const r = await fetch("/api/orders/cart/", { credentials: "include" });
+    if (!r.ok) return { items: [] };
+    return r.json();
+  }
+  async function setCart(items) {
+    return fetch("/api/orders/cart/", {
+      method: "POST",
+      credentials: "include",
+      headers: csrfHeader({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        items: (items || []).map(it => ({
+          id: it.id || it.menu_item || it.menu_item_id,
+          quantity: it.quantity || 1
+        }))
+      })
+    });
+  }
+  async function backupCartNow() {
+    try {
+      const data = await fetchCart();
+      const items = Array.isArray(data.items) ? data.items : [];
+      localStorage.setItem(LS_CART, JSON.stringify(items));
+    } catch(_) {}
+  }
+  async function restoreCartIfEmpty() {
+    try {
+      const data = await fetchCart();
+      const items = Array.isArray(data.items) ? data.items : [];
+      if (items.length === 0) {
+        const backup = localStorage.getItem(LS_CART);
+        if (backup) {
+          const parsed = JSON.parse(backup);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            await setCart(parsed);
+          }
+        }
+      } else {
+        localStorage.setItem(LS_CART, JSON.stringify(items));
+      }
+    } catch(_) {}
+  }
 
   function getTableNumber() {
     const cands = [
@@ -110,68 +160,170 @@
     const payModal = $("#pay-options-modal");
     const payForm  = $("#pay-options-form");
     const payStatus= $("#pay-options-status");
+    const tableWrap= $("#table-number-wrapper");
+    const inlineChoices = document.getElementsByName("order_method_inline");
 
-    // modal open/close
-    function openPayModal(){ payModal?.classList.remove("hidden"); }
-    function closePayModal(){ payModal?.classList.add("hidden"); }
+    // Force hidden by default (don’t rely on CSS class existing)
+    if (payModal) { payModal.style.display = "none"; }
 
-    // Open via Pay button
-    payBtn?.addEventListener("click", async (e) => {
-      e.preventDefault();
-      if (!isLoggedIn()) {
-        window.__continueCheckoutAfterAuth = async () => { openPayModal(); };
-        if (typeof window.__openAuthModalForPay === "function") window.__openAuthModalForPay();
-        return;
-      }
-      openPayModal();
+    function openPayModal(){
+      if (!payModal) return;
+      payModal.style.display = "flex";
+      payModal.classList.remove("hidden");
+    }
+    function closePayModal(){
+      if (!payModal) return;
+      payModal.style.display = "none";
+      payModal.classList.add("hidden");
+    }
+
+    // selection state
+    let selectedMethod = null;   // "DINE_IN" | "UBER_EATS" | "DOORDASH"
+    let selectionReady = false;  // Pay enabled only if true
+    let dineInTable = null;
+
+    function setPayEnabled(on) {
+      if (!payBtn) return;
+      payBtn.disabled = !on;
+    }
+    setPayEnabled(false); // start disabled until user picks a method
+
+    // When user picks a method inline
+    inlineChoices.forEach(el => {
+      el.addEventListener("change", async () => {
+        selectedMethod = el.value.toUpperCase();
+        selectionReady = false;
+        setPayEnabled(false);
+
+        // remember choice (so we can resume after login)
+        localStorage.setItem(LS_CHOICE, JSON.stringify({ method: selectedMethod, table: dineInTable }));
+
+        if (selectedMethod === "DINE_IN") {
+          // sync modal radios + show table field, then open modal
+          try {
+            payForm?.querySelectorAll("input[name='service_type']").forEach(r => {
+              r.checked = (r.value.toUpperCase() === "DINE_IN");
+            });
+            if (tableWrap) tableWrap.style.display = "block";
+          } catch(_) {}
+          openPayModal();
+        } else {
+          // aggregator selected → set meta, enable Pay
+          try { await setCartMeta(selectedMethod, null); } catch(_) {}
+          selectionReady = true;
+          setPayEnabled(true);
+        }
+      });
     });
 
-    // Robust close handling:
-    // 1) Any element with .pay-close OR legacy #pay-close
+    // Close buttons (any .pay-close or legacy #pay-close)
     document.addEventListener("click", (e) => {
       const tgt = e.target;
       if (!tgt) return;
       if (tgt.closest && (tgt.closest(".pay-close") || tgt.closest("#pay-close"))) {
         e.preventDefault();
         closePayModal();
+        // if Dine-in modal canceled, keep Pay disabled until user re-chooses
+        if (selectedMethod === "DINE_IN" && !dineInTable) {
+          selectionReady = false;
+          setPayEnabled(false);
+        }
       }
     });
 
-    // 2) Overlay click (click outside modal content)
+    // Overlay click closes modal
     payModal?.addEventListener("click", (e) => {
-      const content = payModal.firstElementChild; // inner dialog
+      const content = payModal.firstElementChild;
       if (!content) return;
       if (!content.contains(e.target)) {
         closePayModal();
+        if (selectedMethod === "DINE_IN" && !dineInTable) {
+          selectionReady = false;
+          setPayEnabled(false);
+        }
       }
     });
 
-    // 3) ESC key
+    // ESC closes modal
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") closePayModal();
+      if (e.key === "Escape") {
+        closePayModal();
+        if (selectedMethod === "DINE_IN" && !dineInTable) {
+          selectionReady = false;
+          setPayEnabled(false);
+        }
+      }
     });
 
-    // Submit chosen service type
+    // Submit Dine-in table in modal
     payForm?.addEventListener("submit", async (e) => {
       e.preventDefault();
-      if (payStatus) payStatus.textContent = "Preparing checkout…";
+      if (payStatus) payStatus.textContent = "Saving…";
       try {
-        const st = (new FormData(payForm).get("service_type") || "DINE_IN").toString().toUpperCase();
+        const st = (new FormData(payForm).get("service_type") || "").toString().toUpperCase();
+        if (st !== "DINE_IN") selectedMethod = st || selectedMethod;
         const tableNo = getTableNumber();
-        if (st === "DINE_IN" && !tableNo) {
-          if (payStatus) payStatus.textContent = "Please enter a table number for Dine-In.";
+        if (!tableNo) {
+          if (payStatus) payStatus.textContent = "Please enter a valid table number.";
           return;
         }
-        await setCartMeta(st, tableNo);
-        await createOrderAndMaybeGo(st, tableNo);
+        dineInTable = tableNo;
+        localStorage.setItem(LS_CHOICE, JSON.stringify({ method: "DINE_IN", table: dineInTable }));
+        await setCartMeta("DINE_IN", dineInTable);
+        selectionReady = true;
+        setPayEnabled(true);
+        if (payStatus) payStatus.textContent = "";
+        closePayModal();
       } catch (err) {
-        if (payStatus) payStatus.textContent = (err && err.message) || "Unable to start checkout.";
+        if (payStatus) payStatus.textContent = (err && err.message) || "Unable to save.";
       }
     });
 
-    // After auth flow, if continuation is set to show pay modal:
-    if (typeof window.__continueCheckoutAfterAuth !== "function") {
-      window.__continueCheckoutAfterAuth = async () => { openPayModal(); };
-    }
+    // Pay button: only proceeds when selectionReady
+    payBtn?.addEventListener("click", async (e) => {
+      e.preventDefault();
+      if (!selectionReady || !selectedMethod) {
+        const hint = $("#order-method-hint");
+        if (hint) { hint.style.color = "#b00"; setTimeout(()=>hint.style.color="#666", 1500); }
+        return;
+      }
+
+      // Backup cart before any redirect to login
+      await backupCartNow();
+
+      if (!isLoggedIn()) {
+        // define continuation ONLY when user actually tried to pay
+        window.__continueCheckoutAfterAuth = async () => {
+          await restoreCartIfEmpty();
+
+          // re-apply saved choice
+          const saved = JSON.parse(localStorage.getItem(LS_CHOICE) || "{}");
+          const method = (saved.method || selectedMethod || "").toUpperCase();
+          const table  = saved.table || dineInTable || null;
+
+          if (method === "DINE_IN" && !table) {
+            try {
+              payForm?.querySelectorAll("input[name='service_type']").forEach(r => {
+                r.checked = (r.value.toUpperCase() === "DINE_IN");
+              });
+              if (tableWrap) tableWrap.style.display = "block";
+            } catch(_) {}
+            openPayModal();
+            return;
+          }
+
+          try { await setCartMeta(method, table); } catch(_) {}
+          await createOrderAndMaybeGo(method, table);
+        };
+        if (typeof window.__openAuthModalForPay === "function") window.__openAuthModalForPay();
+        return;
+      }
+
+      // Logged in
+      await createOrderAndMaybeGo(selectedMethod, dineInTable);
+    });
+
+    // If returning from login organically, attempt a one-time restore silently
+    restoreCartIfEmpty();
   });
 })();

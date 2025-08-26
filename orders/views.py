@@ -138,13 +138,15 @@ class SessionCartViewSet(viewsets.ViewSet):
 
     @action(methods=["post"], detail=False, url_path="meta", permission_classes=[AllowAny])
     def set_meta(self, request):
-        # NOTE: use canonical "UBER_EATS"
+        # Accept 'UBER_EATS' (canonical) and 'UBEREATS' alias
         allowed = {"DINE_IN", "UBER_EATS", "DOORDASH"}
         meta = _cart_meta_get(request)
         st = str(request.data.get("service_type", "")).upper().strip()
+        if st == "UBEREATS":
+            st = "UBER_EATS"
         if st and st in allowed:
             meta["service_type"] = st
-        table = request.data.get("table_number")
+        table = request.data.get("table_number") or request.data.get("table_num")
         if table:
             try:
                 meta["table_number"] = int(table)
@@ -162,6 +164,10 @@ class SessionCartViewSet(viewsets.ViewSet):
 
     @action(methods=["post"], detail=False, url_path="merge", permission_classes=[IsAuthenticated])
     def merge(self, request):
+        """
+        Merge session cart into user's open PENDING order (no duplicates: quantities are summed).
+        Leaves everything else untouched.
+        """
         session_items = _normalize_items(_cart_get(request))
         if not session_items:
             return Response({"status": "noop", "detail": "empty session cart"})
@@ -173,7 +179,7 @@ class SessionCartViewSet(viewsets.ViewSet):
                 .order_by("-id").first()
             )
             if not order:
-                order = Order.objects.create(created_by=request.user, status="PENDING")
+                order = Order.objects.create(created_by=request.user, status="PENDING", currency=_currency())
 
             existing = {oi.menu_item_id: oi for oi in order.items.select_related("menu_item")}
             for it in session_items:
@@ -186,6 +192,10 @@ class SessionCartViewSet(viewsets.ViewSet):
                     oi.save(update_fields=["quantity", "unit_price"])
                 else:
                     OrderItem.objects.create(order=order, menu_item_id=pid, quantity=qty, unit_price=unit)
+
+            # Optionally clear session cart after merge (keeps system consistent)
+            _cart_set(request, [])
+
         return Response({"status": "ok", "order_id": order.id})
 
 
@@ -259,17 +269,24 @@ class OrderViewSet(viewsets.ModelViewSet):
         user = getattr(request, "user", None)
 
         # ---- Parse incoming options
-        body_source = (request.data.get("service_type") or request.data.get("source") or "").upper().strip()
-        if body_source not in {"DINE_IN", "UBER_EATS", "DOORDASH"}:
-            body_source = None
-        table_number = request.data.get("table_number")
+        body_source_raw = (request.data.get("service_type") or request.data.get("source") or "").upper().strip()
+        # accept UBEREATS alias, normalize to UBER_EATS
+        if body_source_raw == "UBEREATS":
+            body_source_raw = "UBER_EATS"
+        body_source = body_source_raw if body_source_raw in {"DINE_IN", "UBER_EATS", "DOORDASH"} else None
+
+        table_number = request.data.get("table_number") or request.data.get("table_num")
         tip_percent = request.data.get("tip_percent")
         tip_amount_custom = request.data.get("tip_amount") or request.data.get("tip_custom")
         coupon_code = (request.data.get("coupon") or request.data.get("coupon_code") or "").strip()
 
         # Session defaults
         session_meta = _cart_meta_get(request)
-        source = body_source or session_meta.get("service_type") or "DINE_IN"
+        session_source = str(session_meta.get("service_type") or "").upper().strip()
+        if session_source == "UBEREATS":
+            session_source = "UBER_EATS"
+
+        source = body_source or session_source or "DINE_IN"
         if source not in {"DINE_IN", "UBER_EATS", "DOORDASH"}:
             source = "DINE_IN"
 
@@ -312,7 +329,7 @@ class OrderViewSet(viewsets.ModelViewSet):
             order.source = source
             if source == "DINE_IN":
                 if table_number is None:
-                    table_number = session_meta.get("table_number")
+                    table_number = session_meta.get("table_number") or session_meta.get("table_num")
                 if table_number:
                     try:
                         order.table_number = int(table_number)
@@ -348,7 +365,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                     order.discount_code = c.code
 
             # ---- Loyalty (auto-apply once when available)
-            if user and user.is_authenticated and not order.loyalty_reward_applied:
+            if user and user.is_authenticated and not getattr(order, "loyalty_reward_applied", False):
                 reward = get_available_reward_for_user(user)
                 if reward:
                     reserve_reward_for_order(reward, order)
@@ -377,7 +394,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                     "total": str(order.grand_total()),
                     "currency": _currency(),
                     "source": order.source,
-                    "table_number": order.table_number,
+                    "table_number": getattr(order, "table_number", None),
                 },
                 status=201,
             )

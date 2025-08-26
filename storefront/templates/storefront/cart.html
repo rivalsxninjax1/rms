@@ -6,6 +6,26 @@
   <h1>Your Cart</h1>
   <div id="cart-items"></div>
 
+  {# If you have an "Apply Coupon" block, keep it *above* this selector.
+     This selector goes directly below coupon and *above* Pay. #}
+
+  <!-- Inline Order Method (visible on cart; no default selection) -->
+  <div id="order-method-inline" style="margin:16px 0;">
+    <div style="font-weight:600; margin-bottom:8px;">Order Method</div>
+    <label style="margin-right:16px;">
+      <input type="radio" name="order_method_inline" value="DINE_IN"> Dine-in
+    </label>
+    <label style="margin-right:16px;">
+      <input type="radio" name="order_method_inline" value="UBER_EATS"> Uber Eats
+    </label>
+    <label>
+      <input type="radio" name="order_method_inline" value="DOORDASH"> DoorDash
+    </label>
+    <div id="order-method-hint" style="margin-top:6px; font-size:12px; color:#666;">
+      Select a method to enable the Pay button.
+    </div>
+  </div>
+
   <div class="cart-actions" style="margin-top: 16px;">
     <button id="pay-btn" class="btn btn-primary" disabled>Pay with Card</button>
   </div>
@@ -15,7 +35,7 @@
 
   <!-- Pay Options Modal (used by cart-pay.js) -->
   <div id="pay-options-modal" class="hidden"
-       style="position:fixed; inset:0; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index:1000;">
+       style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); align-items:center; justify-content:center; z-index:1000;">
     <div style="background:#fff; width:100%; max-width:520px; padding:16px; border-radius:8px; box-shadow:0 10px 30px rgba(0,0,0,.2);">
       <div style="display:flex; align-items:center; justify-content:space-between;">
         <h3 style="margin:0;">Choose service type</h3>
@@ -26,7 +46,7 @@
       <form id="pay-options-form" style="margin-top:12px;">
         <fieldset style="border:0; padding:0; margin:0 0 12px;">
           <label style="display:block; margin:6px 0;">
-            <input type="radio" name="service_type" value="DINE_IN" checked>
+            <input type="radio" name="service_type" value="DINE_IN">
             Dine-In
           </label>
           <label style="display:block; margin:6px 0;">
@@ -48,7 +68,7 @@
         </fieldset>
 
         <!-- Required for Dine-In: cart-pay.js reads this by id/name -->
-        <div id="table-number-wrapper" style="margin:10px 0;">
+        <div id="table-number-wrapper" style="margin:10px 0; display:none;">
           <label for="table_number" style="display:block; font-weight:600;">Table # (Dine-In only)</label>
           <input type="number" id="table_number" name="table_number" min="1" placeholder="Table #"
                  style="width:100%; padding:8px;">
@@ -58,7 +78,7 @@
         <div id="pay-options-status" style="margin-top:10px; color:#b00;"></div>
 
         <div style="margin-top:14px; display:flex; gap:8px; justify-content:flex-end;">
-          <!-- remove duplicate id; use class so JS closes modal -->
+          <!-- Cancel just closes modal; no duplicate id -->
           <button type="button" class="btn btn-light pay-close">Cancel</button>
           <button type="submit" class="btn btn-primary">Continue</button>
         </div>
@@ -66,17 +86,89 @@
     </div>
   </div>
 
+  <!-- Keep inline radios in sync with modal radios (UI only; logic in cart-pay.js) -->
   <script>
-    // Hide table field unless Dine-In selected
     (function(){
-      const form = document.getElementById('pay-options-form');
-      const wrap = document.getElementById('table-number-wrapper');
-      function sync(){
-        const val = (new FormData(form).get('service_type') || '').toString().toUpperCase();
-        wrap.style.display = (val === 'DINE_IN') ? 'block' : 'none';
+      const inline = document.getElementsByName("order_method_inline");
+      const modalForm = document.getElementById("pay-options-form");
+      const wrap = document.getElementById("table-number-wrapper");
+
+      function setModal(val){
+        if (!modalForm) return;
+        modalForm.querySelectorAll("input[name='service_type']").forEach(r => {
+          r.checked = (r.value.toUpperCase() === val);
+        });
+        if (wrap) wrap.style.display = (val === "DINE_IN") ? "block" : "none";
       }
-      form?.addEventListener('change', sync);
-      document.addEventListener('DOMContentLoaded', sync);
+
+      inline.forEach(el => {
+        el.addEventListener("change", () => setModal(el.value.toUpperCase()));
+      });
+    })();
+  </script>
+
+  <!-- Backup/Restore session cart around login using localStorage (no server changes) -->
+  <script>
+    (function(){
+      function getCookie(name) {
+        const value = `; ${document.cookie}`;
+        const parts = value.split(`; ${name}=`);
+        if (parts.length === 2) return parts.pop().split(";").shift();
+        return null;
+      }
+      function csrfHeaders(base) {
+        const h = new Headers(base || {});
+        const token = getCookie("csrftoken") || getCookie("CSRF-TOKEN") || getCookie("XSRF-TOKEN");
+        if (token) h.set("X-CSRFToken", token);
+        return h;
+      }
+
+      const LS_KEY = "cart_backup_v1";
+
+      async function fetchCart() {
+        const r = await fetch("/api/orders/cart/", { credentials: "include" });
+        if (!r.ok) return { items: [] };
+        return r.json();
+      }
+      async function setCart(items) {
+        return fetch("/api/orders/cart/", {
+          method: "POST",
+          credentials: "include",
+          headers: csrfHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({
+            items: (items || []).map(it => ({
+              id: it.id || it.menu_item || it.menu_item_id,
+              quantity: it.quantity || 1
+            }))
+          })
+        });
+      }
+
+      document.addEventListener("DOMContentLoaded", async () => {
+        try {
+          const data = await fetchCart();
+          const items = Array.isArray(data.items) ? data.items : [];
+          if (items.length > 0) {
+            localStorage.setItem(LS_KEY, JSON.stringify(items));
+            return;
+          }
+          const backup = localStorage.getItem(LS_KEY);
+          if (backup) {
+            const parsed = JSON.parse(backup);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              await setCart(parsed);
+            }
+          }
+        } catch (_) {}
+      });
+
+      window.addEventListener("beforeunload", async () => {
+        try {
+          const data = await fetchCart();
+          const items = Array.isArray(data.items) ? data.items : [];
+          localStorage.setItem(LS_KEY, JSON.stringify(items));
+        } catch (_e) {}
+      });
     })();
   </script>
 
